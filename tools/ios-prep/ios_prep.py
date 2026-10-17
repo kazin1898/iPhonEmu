@@ -4,6 +4,7 @@
   ios_prep.py info      IPSW                      what the IPSW is (device, build, components)
   ios_prep.py prepare   IPSW --out DIR [options]   decrypt kernel/DT/iBoot, expand the rootfs, build kboot.bin
   ios_prep.py kboot     DIR [options]              rebuild kboot.bin from a prepared directory
+                        (--ramdisk restore|update --ipsw IPSW: boot the IPSW's ramdisk as root, rd=md0)
   ios_prep.py inventory DIR [--docs DOCS]          device-tree dump and the kernelcache's kext list
 
 Needs the build's keys: --keys JSON, else the cache keys_<build>_<device>.json beside the IPSW, else
@@ -116,7 +117,28 @@ def read(path):
         return f.read()
 
 
-def build_kboot(out_dir, args):
+def ramdisk_image(out_dir, args, ip=None):
+    """The decrypted restore/update ramdisk (raw HFS+), from DIR/ramdisk-<which>.dmg or the IPSW."""
+    which = args.ramdisk
+    if not which:
+        return None
+    path = os.path.join(out_dir, f"ramdisk-{which}.dmg")
+    if not os.path.exists(path):
+        if ip is None:
+            if not args.ipsw:
+                raise SystemExit(f"{path} is not there yet: pass --ipsw to decrypt it")
+            ip = IPSW(args.ipsw)
+        keys = keymod.load(ip.build, ip.product, os.path.dirname(os.path.abspath(ip.path)), getattr(args, "keys", None))
+        comp = {"restore": "RestoreRamDisk", "update": "UpdateRamDisk"}[which]
+        decrypt_component(ip, keys, comp, path)
+    data = read(path)
+    if data[0x400:0x402] not in (b"H+", b"HX"):
+        raise SystemExit(f"{path} is not a raw HFS+ image (no H+/HX header at 0x400)")
+    log(f"ramdisk: {os.path.basename(path)}, {len(data)} bytes")
+    return data
+
+
+def build_kboot(out_dir, args, ip=None):
     kernel = read(os.path.join(out_dir, "kernelcache.mach"))
     dtb = read(os.path.join(out_dir, "DeviceTree.bin"))
     iboot_path = os.path.join(out_dir, "iBoot.bin")
@@ -127,7 +149,8 @@ def build_kboot(out_dir, args):
     if args.verbose_boot and "-v" not in boot_args.split():
         boot_args += " -v"
     image, load_pa, entry, ba_pa, info = kboot.build(kernel, dtb, ident, boot_args=boot_args, iboot=iboot,
-                                                      cpus=args.cpus, nand=args.nand, hide=args.hide or ())
+                                                      cpus=args.cpus, nand=args.nand, hide=args.hide or (),
+                                                      ramdisk=ramdisk_image(out_dir, args, ip))
     blob = kboot.bundle(image, load_pa, entry, ba_pa)
     out = os.path.join(out_dir, "kboot.bin")
     with open(out, "wb") as f:
@@ -136,7 +159,8 @@ def build_kboot(out_dir, args):
     with open(os.path.join(out_dir, "kboot.json"), "w") as f:
         json.dump(info, f, indent=2, default=lambda v: "0x%x" % v if isinstance(v, int) else v)
     log(f"kboot.bin: {len(blob)} bytes, load 0x{load_pa:08x} entry 0x{entry:08x} boot_args 0x{ba_pa:08x} "
-        f"(Version {info['boot_args_version']}, {args.cpus} cpu(s), nand={args.nand})")
+        f"(Version {info['boot_args_version']}, {args.cpus} cpu(s), nand={args.nand}"
+        + (f", ramdisk {args.ramdisk} at 0x{info['ramdisk'][0]:08x})" if info.get("ramdisk") else ")"))
     return out, info
 
 
@@ -223,7 +247,7 @@ def cmd_prepare(args):
             hfs, info = expand_rootfs(ip, keys, out, keep_dmg=args.keep_dmg)
             hashes["rootfs"] = info
     write_inventory(out, args.docs)
-    build_kboot(out, args)
+    build_kboot(out, args, ip)
     for name in ("kernelcache.mach", "DeviceTree.bin", "iBoot.bin", "kboot.bin", "rootfs.hfs"):
         p = os.path.join(out, name)
         if os.path.exists(p):
@@ -251,6 +275,8 @@ def add_kboot_opts(p):
     p.add_argument("--boot-args", help="kernel boot-args (default: %s)" % kboot.DEFAULT_BOOT_ARGS)
     p.add_argument("--verbose-boot", action="store_true", help="append -v (text console on the panel)")
     p.add_argument("--hide", action="append", metavar="NODE", help="DT node to unmatch (repeatable)")
+    p.add_argument("--ramdisk", choices=("restore", "update"),
+                   help="stage the IPSW's restore or update ramdisk as the root (rd=md0): launchd with no NAND")
     p.add_argument("--seed", default="iPhonEmu n94 dev1", help="identity seed (serial, ECID, MACs)")
     p.add_argument("--docs", help="also copy devicetree.txt/kexts.txt/iomap.tsv into this directory")
 
@@ -272,6 +298,8 @@ def main():
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser("kboot")
     p.add_argument("dir")
+    p.add_argument("--ipsw", help="the IPSW, needed once to decrypt a --ramdisk")
+    p.add_argument("--keys", help="keys JSON (else cached beside the IPSW, else The Apple Wiki)")
     add_kboot_opts(p)
     p.set_defaults(fn=cmd_kboot)
     p = sub.add_parser("inventory")

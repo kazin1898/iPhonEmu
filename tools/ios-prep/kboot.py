@@ -181,7 +181,10 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
                   ("fixed-frequency", board.fixed_hz), ("timebase-frequency", board.timebase_hz)):
         dt.set_if("cpus/cpu0", k, hz)
     if cpus == 1 and dt.contains("cpus/cpu1"):
-        # Bring-up on one core: the second CPU's node matches nothing and is not a "cpu".
+        # Bring-up on one core: the second CPU's node matches nothing and is not a "cpu". (The boot-args
+        # also carry cpus=1, see build(): AppleARMPE counts every child of /cpus for the CPU interrupt
+        # controller and only the boot-arg lowers that, and AppleInterruptController::start blocks in
+        # IOCPUInterruptController::registerInterrupt until that many CPUs are up.)
         dt.unmatch("cpus/cpu1", "xcpu")
     # arm-io clocks
     slots = (dt.slot_len("arm-io", "clock-frequencies") or 0) // 4
@@ -229,8 +232,14 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
 
 
 def build(kernel, devicetree, identity, boot_args=DEFAULT_BOOT_ARGS, iboot=None, cpus=2, nand="raw",
-          hide=(), board=None):
-    """(image bytes, load_pa, entry_pa, bootargs_pa, info dict) for a kernelcache Mach-O and a DT blob."""
+          hide=(), board=None, ramdisk=None):
+    """(image bytes, load_pa, entry_pa, bootargs_pa, info dict) for a kernelcache Mach-O and a DT blob.
+
+    `ramdisk` (a raw HFS+ image, the IPSW's decrypted restore or update ramdisk) is staged right after
+    boot_args, under topOfKernelData so the kernel does not reclaim it, and published as the
+    chosen/memory-map "RAMDisk" entry the kernel's md driver looks up; `rd=md0` makes it the root.
+    That is how iBoot boots a restore ramdisk, and it gives launchd a root with no NAND model.
+    """
     page = lambda n: (n + 0xFFF) & ~0xFFF
     m = MachO(kernel)
     segs = [s for s in m.segments if s.name != "__PAGEZERO"]
@@ -247,6 +256,13 @@ def build(kernel, devicetree, identity, boot_args=DEFAULT_BOOT_ARGS, iboot=None,
     dt_va = top
     args_va = dt_va + page(dt_len)
     end_va = args_va + 0x1000
+    if cpus == 1 and "cpus=" not in boot_args:
+        boot_args += " cpus=1"
+    rd_va, rd_len = end_va, len(ramdisk) if ramdisk else 0
+    if ramdisk:
+        end_va = rd_va + page(rd_len)
+        if "rd=" not in boot_args:
+            boot_args += " rd=md0"
     top_of_kernel = pa((end_va + 0x3FFF) & ~0x3FFF)
 
     image = bytearray(end_va - vbase)
@@ -259,6 +275,9 @@ def build(kernel, devicetree, identity, boot_args=DEFAULT_BOOT_ARGS, iboot=None,
         image[at:at + n] = kernel[s.fileoff:s.fileoff + n]
         memory_map.append((f"Kernel-{s.name}", pa(s.vmaddr), s.vmsize))
     memory_map += [("DeviceTree", pa(dt_va), dt_len), ("BootArgs", pa(args_va), 0x1000)]
+    if ramdisk:
+        image[rd_va - vbase:rd_va - vbase + rd_len] = ramdisk
+        memory_map.append(("RAMDisk", pa(rd_va), rd_len))
     fill_dt(dt, board, memory_map, identity, iboot_version(iboot), ROOT_MATCHING, cpus=cpus, nand=nand,
             product_id=product_id_from_iboot(iboot), hide=hide)
     if len(dt.data) != dt_len:
@@ -283,7 +302,7 @@ def build(kernel, devicetree, identity, boot_args=DEFAULT_BOOT_ARGS, iboot=None,
         "top_of_kernel": top_of_kernel, "entry": pa(m.entry()), "boot_args_pa": pa(args_va),
         "boot_args_version": version, "device_tree": [pa(dt_va), dt_len], "vram": [board.vram_pa, VRAM_SIZE],
         "pram": [board.pram_pa, PRAM_SIZE], "memory_map": memory_map, "boot_args": boot_args, "cpus": cpus,
-        "nand": nand,
+        "nand": nand, "ramdisk": [pa(rd_va), rd_len] if ramdisk else None,
     }
     return bytes(image), board.phys_base, pa(m.entry()), pa(args_va), info
 
