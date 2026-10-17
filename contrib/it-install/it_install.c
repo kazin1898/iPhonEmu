@@ -19,8 +19,13 @@
  *      later are ordinary pages;
  *   3. writes an MBR with two Apple_HFS partitions: the system volume and the data volume (the
  *      MBR last, so a half-done install is not taken for a finished one);
- *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, mounts it and
- *      creates the directories iOS expects under /private/var;
+ *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, mounts it,
+ *      creates the directories iOS expects under /private/var and writes launchd's overrides
+ *      database (db/launchd.db/com.apple.launchd/overrides.plist) disabling keybagd (without the
+ *      system keybag (B4, effaceable storage and MobileKeyBag, not done yet) its kb_load fails
+ *      and it reboots the device into recovery 20 s after launchd) and the Bluetooth jobs (no
+ *      controller behind uart3, as on the fork's A4 boards). The system volume stays as Apple
+ *      shipped it; the knobs live on the emulator's data volume;
  *   5. syncs and halts.
  *
  * Every step is idempotent: a second run finds the MBR ("already installed") and only repairs a
@@ -53,6 +58,7 @@
 #define SYS_reboot 55
 #define SYS_execve 59
 #define SYS_chmod 15
+#define SYS_dup2 90
 #define SYS_fsync 95
 #define SYS_mkdir 136
 #define SYS_pread 153                  /* only the IT_PROBE build uses pread/pwrite */
@@ -298,6 +304,13 @@ static int run(int con, const char *path, const char *const argv[])
         return -1;
     }
     if (child) {
+        /* the child's stdout and stderr go to the console, so the tools' messages reach the log */
+        long c = sys(SYS_open, (long)"/dev/console", O_RDWR, 0, 0);
+
+        if (c >= 0) {
+            sys(SYS_dup2, c, 1, 0, 0);
+            sys(SYS_dup2, c, 2, 0, 0);
+        }
         sys(SYS_execve, (long)path, (long)argv, (long)envp, 0);
         sys(SYS_exit, 127, 0, 0, 0);
     }
@@ -333,9 +346,42 @@ static void mkdir_as(const char *path, int mode, int uid)
     }
 }
 
-/* The empty data volume gets the directories launchd and the daemons expect (restored's skeleton). */
+#define O_CREAT 0x200
+#define O_TRUNC 0x400
+
+static int write_file(const char *path, const char *data, uint32_t len)
+{
+    long fd = sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
+    long n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = sys(SYS_write, fd, (long)data, len, 0);
+    sys(SYS_close, fd, 0, 0, 0);
+    return n == (long)len ? 0 : -1;
+}
+
+/*
+ * launchd's overrides (what `launchctl unload -w` writes): keybagd off until B4 gives it a keybag;
+ * BTServer and BlueTool off as the fork keeps them on the A4 boards (docs/ipad1/README.md
+ * "Bluetooth: parked"): there is no Bluetooth controller behind uart3, and BlueTool's HCI traffic
+ * through AppleOnboardSerial's rx DMA path ended in a kernel assertion (AppleSimpleUARTSync.cpp:2177).
+ */
+static const char overrides[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+    "<plist version=\"1.0\">\n<dict>\n"
+    "\t<key>com.apple.mobile.keybagd</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
+    "\t<key>com.apple.BTServer</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
+    "\t<key>com.apple.BlueTool</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
+    "</dict>\n</plist>\n";
+
+/* The data volume gets the directories launchd and the daemons expect (restored's skeleton) and the
+ * overrides database; every step is idempotent, so this runs on every install boot. */
 static void populate_data(int con)
 {
+    static const char *const fsck[] = { "fsck_hfs", "-fy", DATA_DEV, 0 };
     static const char *const mount[] = { "mount_hfs", DATA_BDEV, DATA_MNT, 0 };
     static const char *const dirs[] = {
         "/db", "/db/timezone", "/empty", "/folders", "/keybags", "/log", "/logs", "/logs/CrashReporter",
@@ -344,11 +390,13 @@ static void populate_data(int con)
         "/MobileDevice", "/MobileDevice/ProvisioningProfiles", "/Managed Preferences",
         "/Managed Preferences/mobile", "/audit", "/ea", "/mobile", "/mobile/Library", "/mobile/Media",
         "/mobile/Applications", "/mobile/Documents", "/mobile/Library/Preferences",
-        "/mobile/Library/Caches", "/mobile/Library/Logs", "/mobile/Library/Keyboard", 0
+        "/mobile/Library/Caches", "/mobile/Library/Logs", "/mobile/Library/Keyboard",
+        "/db/launchd.db", "/db/launchd.db/com.apple.launchd", 0
     };
     char path[96];
     uint32_t i, j, k;
 
+    run(con, "/sbin/fsck_hfs", fsck);        /* a volume the last boot left mounted needs its journal replayed */
     if (run(con, "/sbin/mount_hfs", mount) != 0) {
         say(con, "it_install: mount_hfs failed, data volume left empty\n");
         return;
@@ -374,6 +422,9 @@ static void populate_data(int con)
         mkdir_as(path, mode, uid);
     }
     mkdir_as(DATA_MNT "/tmp", 01777, 0);
+    say_num(con, "it_install: launchd overrides (keybagd, BTServer, BlueTool disabled) -> ",
+            (uint32_t)write_file(DATA_MNT "/db/launchd.db/com.apple.launchd/overrides.plist", overrides,
+                                 sizeof(overrides) - 1));
     sys(SYS_sync, 0, 0, 0, 0);
     say_num(con, "it_install: data volume populated, unmount -> ",
             (uint32_t)sys(SYS_unmount, (long)DATA_MNT, 0, 0, 0));
@@ -504,8 +555,8 @@ data:
         if (st != 0) {
             park(con, "newfs_hfs");
         }
-        populate_data(con);
     }
+    populate_data(con);
     sys(SYS_sync, 0, 0, 0, 0);
     msleep(1000);
     say(con, "it_install: done\n");
