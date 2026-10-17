@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -28,9 +29,21 @@ for source, dest in json.loads(out).items():
     try:
         os.symlink(source, bundle_dest)
     except BaseException as e:
-        if not isinstance(e, OSError) or e.errno != errno.EEXIST:
-            if os.name == 'nt':
-                print('Please enable Developer Mode to support soft link '
-                      'without Administrator permission')
-            print(f'error making symbolic link {dest}', file=sys.stderr)
-            raise e
+        if isinstance(e, OSError) and e.errno == errno.EEXIST:
+            continue
+        if os.name == 'nt':
+            # Without Developer Mode or SeCreateSymbolicLinkPrivilege, Windows
+            # refuses symbolic links to an unprivileged user. The bundle only
+            # has to mirror the install tree for running from the build
+            # directory, so a copy serves as well as a link there.
+            # Build outputs do not exist yet at configure time: a link may
+            # dangle, a copy cannot, so those are left out of the bundle.
+            if os.path.lexists(bundle_dest) or not os.path.exists(source):
+                continue
+            if os.path.isdir(source):
+                shutil.copytree(source, bundle_dest)
+            else:
+                shutil.copy2(source, bundle_dest)
+            continue
+        print(f'error making symbolic link {dest}', file=sys.stderr)
+        raise e
