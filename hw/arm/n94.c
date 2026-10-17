@@ -275,6 +275,11 @@ static void n94_init(MachineState *machine)
                 qdev_prop_set_string(DEVICE(slave), "mount", "1,2,3");
             }
             i2c_slave_realize_and_unref(slave, bus[slaves[i].bus], &error_fatal);
+            if (!strcmp(slaves[i].type, TYPE_S5L8940_D1881)) {
+                /* the PMU interrupts on GPIO 0x0d, active low (DT pmu interrupts {0xd, 1}) */
+                qdev_connect_gpio_out(DEVICE(slave), 0,
+                                      qemu_irq_invert(qdev_get_gpio_in(s->gpio, S5L8930_GPIO_PIN(0x00d))));
+            }
         }
     }
 

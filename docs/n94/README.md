@@ -86,8 +86,9 @@ the coprocessor forever (the IOP core model is M3 work with the NAND). What happ
 - `CDMAAES` starts the `IOAESAccelerator`, which asks the platform for `SecureRoot`; AppleARMPE answers once
   bsd_init has named the root (`secure-root-prefix` is `md`, so `md0` is secure) and that handshake is what
   releases `IOSecureBSDRoot` in bsd_init. Without the CDMA the kernel sat forever after `BSD root: md0`.
-- The PMU driver finds the D1881 register file on i2c0 (no values yet: `_readADCGated ADC read bad state`),
-  the compass and accelerometer start, the gyro fails its calibration check; `BSD root: md0`.
+- The PMU driver finds the D1881 on i2c0 (events, ADC, RTC counter and restart modeled; the ADC reads
+  mid-scale on every channel), the compass and accelerometer start, the gyro fails its calibration check;
+  `BSD root: md0`. restored's log carries the host's date.
 - `launchd[1] has started up`; `restored_external` runs, finds no display service and no USB host
   (`enable_usb_connections failed`), waits in vain for the `IONVRAM` resource (the NVRAM lives in the NAND's
   partitions on this board) and exits asking for a reboot.
@@ -99,8 +100,7 @@ the coprocessor forever (the IOP core model is M3 work with the NAND). What happ
   every 60 s of wall time (three full cycles in a 200 s run, `runs/n94/m2-serial.log`).
 
 Next: the NAND for the real root and the NVRAM (IOP core running `s5l8940xiop` + FMI, or a PPN model, plus
-an FTL image generator), and the D1881's registers (ADC, RTC, buttons) so the PMU driver stops complaining
-(`_readADCGated(3) ADC read bad state: 1`, no RTC).
+an FTL image generator); then the D1881's ADC channels and wake events when something depends on them.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 

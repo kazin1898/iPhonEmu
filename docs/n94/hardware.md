@@ -188,11 +188,15 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
    and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000, i2s-switch 0x3FA01000-0x3FA0103C
    (all 0), the PL310 "cif" window 0x3FD01020 (<- 1) and 0x3FD01120 (<- 0x80000100). `AppleH4CamIn::start`
    (isp) and `AppleSamsungDPTXControllerS5L8940X` start without faulting on the unimplemented window.
-4. **PMU**: `hw/arm/s5l8940_d1881.c` is a register file plus the restart (0x96 <- 0x2b after 0xa1 <- 0,
-   written by the kernel's `pmu restart`, resets the machine). AppleD1881PMU starts on it (reads 0x5d x4 at
-   boot, ADC through 0x6b/0x08: `_readADCGated(3) ADC read bad state: 1`), `getGMTTimeOfDay` still has no
-   RTC. The registers that matter (events, RTC, ADC, buttons) are to be given meaning from the kext
-   (AppleD1881PMU, text 0x80aea268, is in the Ghidra project).
+4. **PMU**: `hw/arm/s5l8940_d1881.c` models what AppleD1881PMU (text 0x80aea268, decompiled with the
+   Ghidra project) is seen to use: EVENT_A..G at 0x01-0x07 (read 7 at once by the interrupt handler,
+   clear on read; EVENT_B bit 0x20 = ADC done), IRQ_MASK_A..G at 0x0e-0x14 (1 = masked), the ADC (0x43
+   control with 0x20 = start, 12-bit result as 0x44[3:0] | 0x45 << 4, mid-scale for every channel until
+   they are identified), the RTC counter at 0x5d-0x60 (32-bit seconds, the host's clock; the RTC class adds
+   the offset it keeps at 0xa4) and the restart (0x96 <- 0x2b after 0xa1 <- 0, from the kernel's `pmu
+   restart`, resets the machine). Its interrupt is GPIO 0x0d, active low. The driver's `ADC read bad state`
+   and the 1970 date are gone; which ADC channel is what (battery, NTCs, dock) is still open, as are the
+   wake events and buttons.
    **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
    `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
