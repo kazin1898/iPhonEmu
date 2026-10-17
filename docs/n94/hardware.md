@@ -142,8 +142,8 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 | i2c0 | 0x33200000 | 18 | `i2c,s5l8940x|iic,soft` | `hw/arm/s5l8940_i2c.c`: a PA Semi style FIFO master, not the A4 block ("The I2C controller" below). Devices: PMU `pmu,d1881` @0x74 (GPIO irq 0xd; `hw/arm/s5l8940_d1881.c`, a register file), codec `audio-control,cs42l63` @0x4a (the A4 CS42L58 model: the driver never checks the ID), `headset-switch,ts3a8235` @0x3b (none). |
 | i2c1 | 0x33300000 | 19 | same | `compass,akm8975b` @0x0d (A4 AK8975 model), `als,tsl2581` @0x49 (A4 model). |
 | i2c2 | 0x33400000 | 20 | same | `accelerometer,lis331dlh` @0x19 (the iPod LIS302DL model, WHO_AM_I 0x32; AppleLIS331DLH then fails for want of calibration data), `gyro,ap3gdl` @0x6a (A4 L3G4200D model; AppleAP3GDL finds ID 0xd3 and fails on a singular calibration matrix) and @0x68. |
-| otgphyctrl | 0x36000000 | | `otgphyctrl,s5l8940x|s5l8930x` | **A4** (0x86000000). |
-| usb-complex | 0x3F108000; ranges -> 0x36100000+0x600000 | | `usb-complex,s5l8940x|s5l8930x` | **A4**: usb-device 0x36100000 (AIC 11, Synopsys OTG), usb-ehci 0x36400000 + 0x36700000 (AIC 12), usb-ohci0 0x36500000 (AIC 13), usb-ohci1 0x36600000 (AIC 14). |
+| otgphyctrl | 0x36000000 | | `otgphyctrl,s5l8940x|s5l8930x` | **A4** `ipod_touch_usb_phys.c`, wired. |
+| usb-complex | 0x3F108000; ranges -> 0x36100000+0x600000 | | `usb-complex,s5l8940x|s5l8930x` | **A4** models wired: usb-device 0x36100000 (AIC 11, the iPod Synopsys OTG with the A4 GHWCFG; `AppleSynopsysOTGDevice` finds 7+7 endpoints), usb-ehci 0x36400000 (AIC 12, `exynos4210-ehci`; its second window 0x36700000 stays unimplemented), usb-ohci0 0x36500000 (AIC 13), usb-ohci1 0x36600000 (AIC 14). USB_CTL at 0x3F108000 stays in the unimplemented window. |
 | usb-ehci/wlan | HSIC port | GPIO 0x1f | | **new**: Wi-Fi is a BCM4330 over HSIC (`AppleBCMWLANBusInterfaceHSIC`), not the A4's SDIO card. There is no `sdio` node. |
 | usb-ehci/hsic-baseband | HSIC port | GPIO 0x11 | | baseband over HSIC (`AppleBasebandN94`, `AppleBasebandUSB`); the DT `baseband` node is `baseband,n94`. **hide** at boot as the A4 boards do (`baseband=off`). |
 
@@ -188,12 +188,13 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
    and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000, i2s-switch 0x3FA01000-0x3FA0103C
    (all 0), the PL310 "cif" window 0x3FD01020 (<- 1) and 0x3FD01120 (<- 0x80000100). `AppleH4CamIn::start`
    (isp) and `AppleSamsungDPTXControllerS5L8940X` start without faulting on the unimplemented window.
-4. **PMU**: `hw/arm/s5l8940_d1881.c` is a register file; AppleD1881PMU starts on it (reads 0x5d x4 at
-   boot, then ADC: `_readADCGated(3) ADC read bad state: 1`), `getGMTTimeOfDay` still has no RTC. The
-   registers that matter (events, RTC, ADC, buttons) are to be given meaning from the kext.
-   **USB**: the restore ramdisk's restored reboots after `enable_usb_connections failed`, and the reboot
-   path panics in `AppleUSBEHCI::UIMInitialize` on the unimplemented EHCI (0x36400000); the Synopsys OTG
-   device controller (0x36100000) also starts and finds zeros. The A4 models fit both.
+4. **PMU**: `hw/arm/s5l8940_d1881.c` is a register file plus the restart (0x96 <- 0x2b after 0xa1 <- 0,
+   written by the kernel's `pmu restart`, resets the machine). AppleD1881PMU starts on it (reads 0x5d x4 at
+   boot, ADC through 0x6b/0x08: `_readADCGated(3) ADC read bad state: 1`), `getGMTTimeOfDay` still has no
+   RTC. The registers that matter (events, RTC, ADC, buttons) are to be given meaning from the kext
+   (AppleD1881PMU, text 0x80aea268, is in the Ghidra project).
+   **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
+   `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
 6. **Storage** (M2: the kernel sits at `Still waiting for root device`): raw NAND through the IOP's FMI
    firmware vs a PPN model.

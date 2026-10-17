@@ -89,12 +89,18 @@ the coprocessor forever (the IOP core model is M3 work with the NAND). What happ
 - The PMU driver finds the D1881 register file on i2c0 (no values yet: `_readADCGated ADC read bad state`),
   the compass and accelerometer start, the gyro fails its calibration check; `BSD root: md0`.
 - `launchd[1] has started up`; `restored_external` runs, finds no display service and no USB host
-  (`enable_usb_connections failed`), exits and asks for a reboot; the reboot path starts the USB stack and
-  `AppleUSBEHCI::UIMInitialize` panics on the unimplemented EHCI at 0x36400000 (`could not get chip to halt`).
+  (`enable_usb_connections failed`), waits in vain for the `IONVRAM` resource (the NVRAM lives in the NAND's
+  partitions on this board) and exits asking for a reboot.
+- The USB stack comes up on the A4 models (PHY, Synopsys OTG in device mode with its built-in host, EHCI,
+  two OHCIs): `AppleSynopsysOTGDevice::start` finds 7+7 endpoints, the HSIC Wi-Fi and baseband ports time
+  out (`device has not connected after 1500ms`, nothing is behind them).
+- launchd shuts the system down (`About to call: reboot(RB_AUTOBOOT)`), the kernel prints `pmu restart`
+  and writes D1881 register 0x96 <- 0x2b; the PMU model resets the machine and the kernel boots again, about
+  every 60 s of wall time (three full cycles in a 200 s run, `runs/n94/m2-serial.log`).
 
-Next: the USB device/host models (the A4's Synopsys OTG and EHCI at the A5 addresses) so restored can talk
-to a host or the reboot completes, then the NAND (IOP core + FMI or a PPN model) for the real root, and the
-D1881's registers (ADC, RTC, buttons) so the PMU driver stops complaining.
+Next: the NAND for the real root and the NVRAM (IOP core running `s5l8940xiop` + FMI, or a PPN model, plus
+an FTL image generator), and the D1881's registers (ADC, RTC, buttons) so the PMU driver stops complaining
+(`_readADCGated(3) ADC read bad state: 1`, no RTC).
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 
