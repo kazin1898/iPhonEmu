@@ -236,6 +236,18 @@ static void n94_init(MachineState *machine)
     }
 
     /*
+     * The IOP, high-level (hw/arm/s5l8940_iop.c): AppleA5IOP's control block at
+     * 0x3F300000, the doorbell the AP rings through the AIC ("IPID" 3) and the
+     * EmbeddedIOP rings in DRAM. AppleIOPFMI's PPN commands come to it next.
+     */
+    dev = qdev_new(TYPE_S5L8940_IOP);
+    object_property_set_link(OBJECT(dev), "aic", OBJECT(s->aic), &error_abort);
+    sbd = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, S5L8940_IOP_BASE);
+    qdev_connect_gpio_out_named(s->aic, "doorbell", 0, qdev_get_gpio_in_named(dev, "doorbell", 0));
+
+    /*
      * I2C controllers (i2c,s5l8940x; hw/arm/s5l8940_i2c.c) and the DT's slaves.
      * The PMU driver's first read of the D1881 at 0x74 timing out on an
      * unimplemented block was a kernel panic, and with the bus there but

@@ -145,7 +145,30 @@ struct S5L8940AICState {
     uint32_t mask[AIC_WORDS];
     uint32_t target[AIC_MAX_IRQS];
     S5L8940AICCpu cpu[AIC_MAX_CPUS];
+    /*
+     * The IOP's doorbell (hw/arm/s5l8940_iop.c): the iop node's function-doorbell is the
+     * AIC platform function "IPID" with argument 3, and the HLE IOP has no CPU to take an
+     * interrupt, so the vector the AP raises for it rings this line instead: SW_SET of
+     * vector doorbell-vector, or IPI_SET of bit doorbell-ipi (whichever the kext's IPID
+     * turns out to write; both are traced).
+     */
+    qemu_irq doorbell;
+    uint32_t doorbell_vector;
+    uint32_t doorbell_ipi;
 };
+
+static void aic_update(S5L8940AICState *s);
+
+/* A software vector raised from outside the AP (the IOP's answer line, vector 2 on the N94). */
+void s5l8940_aic_sw_set(DeviceState *dev, unsigned vector)
+{
+    S5L8940AICState *s = S5L8940_AIC(dev);
+
+    if (vector < s->num_irqs) {
+        s->sw_state[vector / 32] |= 1u << (vector % 32);
+        aic_update(s);
+    }
+}
 
 static uint64_t aic_ticks(S5L8940AICState *s)
 {
@@ -401,6 +424,10 @@ static void s5l8940_aic_write(void *opaque, hwaddr off, uint64_t val64, unsigned
         if (val & IPI_SELF) {
             s->cpu[c].ipi_pending |= IPI_SELF;
         }
+        if (s->doorbell_ipi < 31 && (val & (1u << s->doorbell_ipi))) {
+            trace_s5l8940_aic_doorbell("IPI_SET", val);
+            qemu_irq_pulse(s->doorbell);
+        }
         break;
     case AIC_IPI_CLR:
         s->cpu[c].ipi_pending &= ~val;
@@ -413,6 +440,10 @@ static void s5l8940_aic_write(void *opaque, hwaddr off, uint64_t val64, unsigned
         break;
     case AIC_SW_SET ... AIC_SW_CLR - 4:
         s->sw_state[(off - AIC_SW_SET) / 4] |= val;
+        if ((off - AIC_SW_SET) / 4 == s->doorbell_vector / 32 && (val & (1u << (s->doorbell_vector % 32)))) {
+            trace_s5l8940_aic_doorbell("SW_SET", val);
+            qemu_irq_pulse(s->doorbell);
+        }
         break;
     case AIC_SW_CLR ... AIC_MASK_SET - 4:
         s->sw_state[(off - AIC_SW_CLR) / 4] &= ~val;
@@ -498,6 +529,7 @@ static void s5l8940_aic_realize(DeviceState *dev, Error **errp)
         return;
     }
     qdev_init_gpio_in(dev, s5l8940_aic_set_irq, s->num_irqs);
+    qdev_init_gpio_out_named(dev, &s->doorbell, "doorbell", 1);
 }
 
 static void s5l8940_aic_init(Object *obj)
@@ -567,6 +599,8 @@ static const VMStateDescription vmstate_s5l8940_aic = {
 static const Property s5l8940_aic_props[] = {
     DEFINE_PROP_UINT32("num-cpus", S5L8940AICState, num_cpus, 2),
     DEFINE_PROP_UINT32("num-irqs", S5L8940AICState, num_irqs, S5L8940_AIC_NUM_IRQS),
+    DEFINE_PROP_UINT32("doorbell-vector", S5L8940AICState, doorbell_vector, 3),
+    DEFINE_PROP_UINT32("doorbell-ipi", S5L8940AICState, doorbell_ipi, 3),
 };
 
 static void s5l8940_aic_class_init(ObjectClass *klass, const void *data)

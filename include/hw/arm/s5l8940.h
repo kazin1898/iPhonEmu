@@ -40,6 +40,8 @@
 #define S5L8940_USB_EHCI_BASE    0x36400000   /* usb-ehci reg[0]; reg[1] 0x36700000 stays unimplemented */
 #define S5L8940_USB_OHCI0_BASE   0x36500000
 #define S5L8940_USB_OHCI1_BASE   0x36600000
+#define S5L8940_IOP_BASE         0x3f300000   /* iop,s5l8940x: the AP-side control block (AppleA5IOP) */
+#define S5L8940_IOP_SIZE         0x1000
 
 /* AIC vector numbers (DT interrupts) */
 #define S5L8940_IRQ_WDT          4
@@ -51,6 +53,9 @@
 #define S5L8940_IRQ_USB_EHCI     12
 #define S5L8940_IRQ_USB_OHCI0    13
 #define S5L8940_IRQ_USB_OHCI1    14
+#define S5L8940_IRQ_IOP          2            /* IOP -> AP (DT iop interrupts) */
+#define S5L8940_IRQ_IOP_DOORBELL 3            /* AP -> IOP: the AIC "IPID" function's argument */
+#define S5L8940_IRQ_FMI(n)       (33 + (n))
 #define S5L8940_AIC_NUM_IRQS     192          /* AIC_INFO[9:0]; the IPI vectors follow at 0xc0.. */
 
 /*
@@ -61,6 +66,14 @@
  * S5L8940_AIC_MAX_CPUS whatever num-cpus says.
  */
 #define TYPE_S5L8940_AIC "s5l8940.aic"
+/* Raise a software vector from outside the AP: the HLE IOP's answer line. */
+void s5l8940_aic_sw_set(DeviceState *dev, unsigned vector);
+/*
+ * IOP (hw/arm/s5l8940_iop.c): the A5 IOP's host-visible surface, high-level: MMIO 0 = the
+ * control block (S5L8940_IOP_SIZE at S5L8940_IOP_BASE); link "aic"; GPIO in "doorbell" (from
+ * the AIC's "doorbell" output). Answers the EmbeddedIOP rings in guest DRAM.
+ */
+#define TYPE_S5L8940_IOP "s5l8940.iop"
 
 /* I2C controller (hw/arm/s5l8940_i2c.c): MMIO 0 (0x1000), sysbus IRQ 0, child bus "i2c". */
 #define TYPE_S5L8940_I2C "s5l8940.i2c"

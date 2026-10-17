@@ -212,6 +212,12 @@ section of the firmware kext, 0x29000 bytes, imported as ARM:LE:32:v7 at 0 with 
   cau_bits 1..7, blocks/cau 0x400..0x2134, block_bits 10..15, pages/block 64..512 (== 1 << page_address_bits),
   SLC pages/block 64..256, bits/cell 1, page size 0x2020..0x4040, queue sizes 1..50, prep buffer <= 200.
   `#bootloader-bytes` is 0x600: boot pages are 1536 bytes.
+- **Seen with the model** (`hw/arm/s5l8940_iop.c`, 2026-10-17): the kext runs the image in place (FW base
+  0x80a8b000 is the firmware kext's `fwFirmwareImage` section in the kernelcache, `cnfg` at 0x80a9f000),
+  the doorbell is **`SW_SET` word 0 bit 3** (0x3F204000 <- 8), the ring addresses are the AP's physical
+  addresses **plus 0x40000000** (DRAM at 0xc0000000 in the IOP's map, as the A4's 'cnfg' memory map put
+  it), rings 0 (control, 2 entries), 3 (sdio, 2), 5 and 6 (fmi0/1, 3 each). The handshake: 'nop ' on ring 0,
+  then set_config (opcode 1) on each FMI ring, then the partition scheme's read_bootpage (opcode 11).
 - **The AP side of PPN**: `AppleIOPFMI-89.3` reads 6-byte chip IDs per FMI:CE from the IOP, publishes
   `device-readid`, `ce-map`, `channels`, `#bootloader-bytes 0x600`, `dbg-chipids` on the nub and lets
   `IOFlashStorageDevice::initWithRegistryEntry` (IOFlashStorage-664.13.12) take the geometry from the DT
@@ -245,7 +251,7 @@ What the IPSW says, in order of consequence:
 4. The restore ramdisk (9.9 MB, `ramdisk-restore.dmg`) carries `restored_external`, `asr`, `newfs_hfs`,
    `mount_hfs`, `fdisk`, `nvram`, `ioflashstoragetool`, `launchd`, MobileKeyBag - and no shell.
 
-Decision taken (pending the user's go-ahead on the cost): **PPN, with the IOP modeled at the mailbox** (the
+Decision (the user's, 2026-10-17, option B below): **PPN, with the IOP modeled at the mailbox** (the
 A4 HLE's shape, `s5l8930_iop.c`), **and the guest doing its own install** instead of an offline sFTL image:
 
 | Step | What | Reuses | Cost |
@@ -296,7 +302,7 @@ Alternatives, costed:
    **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
    `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
-6. **Storage**: decided 2026-10-17 ("Storage: the decision"): PPN through a mailbox-level IOP model, the guest formatting the NAND itself; waiting on the user's go-ahead for the ~3-week path or one of the shortcuts.
+6. **Storage**: decided by the user on 2026-10-17 ("Storage: the decision", option B): PPN through a mailbox-level IOP model and a PPN page store, the guest formatting the NAND on its first boot; B1-B4 in that order.
    firmware vs a PPN model.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
