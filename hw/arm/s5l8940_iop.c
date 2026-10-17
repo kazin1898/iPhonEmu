@@ -48,8 +48,18 @@
  * meta_bytes per page at index (cau * blocks_per_cau + block) * pages_per_block
  * + page, stored XOR 0xff so a hole reads as an erased page (the A4 store's
  * "nand-xor-ff-v2" representation). A row address is (cau << (block_bits +
- * page_bits)) | (block << page_bits) | page; a boot page is the first
+ * page_bits)) | (block << page_bits) | page;  * boot page is the first
  * boot_page_bytes of a page's data.
+ *
+ * Markers (markers.json beside geometry.json; tools/ios-prep install writes
+ * it with the guest helper's table): a stored logical page whose first 16
+ * bytes are the marker magic names a host file ("sources"[u32 at +16]) and a
+ * 4 KiB block in it (u32 at +20; u32 at +24 is source ^ block ^ check), and a
+ * read of that logical page returns the host file's block instead. The guest's
+ * installer (contrib/it-install) writes the system volume as such markers over
+ * /dev/rdisk0, so the FTL lays the volume out in its own on-flash format while
+ * the host keeps the bytes; a page the guest rewrites loses the magic and is an
+ * ordinary page from then on.
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
@@ -68,6 +78,7 @@
 #include "qapi/error.h"
 #include "qobject/qjson.h"
 #include "qobject/qdict.h"
+#include "qobject/qlist.h"
 #include "qobject/qnum.h"
 #include "trace.h"
 #include "hw/trace-printf.h"
@@ -141,6 +152,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940IOPState, S5L8940_IOP)
 #define NAND_MAX_CE         8
 #define NAND_MAX_PAGE       (16384 + 256)
 #define NAND_ID_BYTES       8
+#define MARKER_MAGIC_LEN    16
+#define MARKER_MAX_SOURCES  8
 
 typedef struct NandGeometry {
     uint32_t channels, ce_per_channel, caus_per_ce, blocks_per_cau, pages_per_block;
@@ -171,6 +184,15 @@ struct S5L8940IOPState {
     NandGeometry geo;
     bool have_store;
     BlockBackend *chip[NAND_MAX_CHANNELS][NAND_MAX_CE];
+
+    /* markers.json: host files served behind marker pages */
+    uint8_t marker_magic[MARKER_MAGIC_LEN];
+    uint32_t marker_check;
+    uint32_t marker_block;
+    int nsources;
+    BlockBackend *source[MARKER_MAX_SOURCES];
+    uint64_t source_bytes[MARKER_MAX_SOURCES];
+    uint64_t markers_served, markers_bad;
 };
 
 static inline uint32_t iop_ldl(hwaddr addr)
@@ -237,24 +259,29 @@ static int64_t geometry_get(QDict *g, const char *key, Error **errp)
     return v;
 }
 
+/*
+ * A chip's page file (created at its geometry's size when missing) or, with
+ * size 0, a read-only marker source taken as it is.
+ */
 static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uint64_t size, Error **errp)
 {
     struct stat st;
     QDict *options;
     BlockBackend *blk;
     BlockDriverState *bs;
-    uint64_t perm = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE;
-    uint64_t shared = BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE_UNCHANGED;
-    int fd = open(path, O_RDWR | O_CREAT | O_BINARY, 0644);
+    bool writable = size != 0;
+    uint64_t perm = BLK_PERM_CONSISTENT_READ | (writable ? BLK_PERM_WRITE : 0);
+    uint64_t shared = BLK_PERM_CONSISTENT_READ | (writable ? BLK_PERM_WRITE_UNCHANGED : BLK_PERM_ALL);
+    int fd = open(path, (writable ? O_RDWR | O_CREAT : O_RDONLY) | O_BINARY, 0644);
 
-    if (fd < 0 || fstat(fd, &st) < 0 || (st.st_size == 0 && ftruncate(fd, size) < 0)) {
+    if (fd < 0 || fstat(fd, &st) < 0 || (writable && st.st_size == 0 && ftruncate(fd, size) < 0)) {
         error_setg_errno(errp, errno, "cannot open NAND file %s", path);
         if (fd >= 0) {
             close(fd);
         }
         return NULL;
     }
-    if (st.st_size != 0 && (uint64_t)st.st_size != size) {
+    if (writable && st.st_size != 0 && (uint64_t)st.st_size != size) {
         error_setg(errp, "%s: NAND file size differs from geometry", path);
         close(fd);
         return NULL;
@@ -262,7 +289,7 @@ static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uin
     close(fd);
     options = qdict_new();
     qdict_put_str(options, "driver", "raw");
-    bs = bdrv_open(path, NULL, options, BDRV_O_NO_SHARE | BDRV_O_RDWR | BDRV_O_UNMAP |
+    bs = bdrv_open(path, NULL, options, (writable ? BDRV_O_NO_SHARE | BDRV_O_RDWR | BDRV_O_UNMAP : 0) |
                    (runstate_check(RUN_STATE_INMIGRATE) ? BDRV_O_INACTIVE : 0), errp);
     if (!bs) {
         return NULL;
@@ -283,6 +310,8 @@ static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uin
     bdrv_unref(bs);
     return blk;
 }
+
+static void nand_open_markers(S5L8940IOPState *s, Error **errp);
 
 static void nand_open_store(S5L8940IOPState *s, Error **errp)
 {
@@ -345,6 +374,94 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
         }
     }
     s->have_store = true;
+    nand_open_markers(s, errp);
+}
+
+/*
+ * markers.json: {"format": "iphonemu-markers-v1", "magic": <16 chars>, "check":
+ * u32, "block": 4096, "sources": [{"path": <file>, "bytes": n}, ...]}. A
+ * relative path is relative to the store directory. No file: no markers.
+ */
+static void nand_open_markers(S5L8940IOPState *s, Error **errp)
+{
+    g_autofree char *path = g_strdup_printf("%s/markers.json", s->nand_dir);
+    g_autofree char *text = NULL;
+    QDict *d;
+    QList *sources;
+    const char *magic;
+    const QListEntry *e;
+    Error *err = NULL;
+    int64_t check, block;
+
+    if (!g_file_test(path, G_FILE_TEST_EXISTS)) {
+        return;
+    }
+    if (!g_file_get_contents(path, &text, NULL, NULL)) {
+        error_setg(errp, "%s: cannot read", path);
+        return;
+    }
+    d = qobject_to(QDict, qobject_from_json(text, errp));
+    if (!d) {
+        return;
+    }
+    magic = qdict_get_try_str(d, "magic");
+    check = geometry_get(d, "check", &err);
+    block = geometry_get(d, "block", &err);
+    sources = qobject_to(QList, qdict_get(d, "sources"));
+    if (err) {
+        error_propagate(errp, err);
+        return;
+    }
+    if (g_strcmp0(qdict_get_try_str(d, "format"), "iphonemu-markers-v1") || !magic ||
+        strlen(magic) != MARKER_MAGIC_LEN || block != s->geo.lpn_bytes || !sources) {
+        error_setg(errp, "%s: not a markers file this model serves", path);
+        return;
+    }
+    memcpy(s->marker_magic, magic, MARKER_MAGIC_LEN);
+    s->marker_check = check;
+    s->marker_block = block;
+    QLIST_FOREACH_ENTRY(sources, e) {
+        QDict *src = qobject_to(QDict, qlist_entry_obj(e));
+        const char *p = src ? qdict_get_try_str(src, "path") : NULL;
+        g_autofree char *full = NULL;
+
+        if (!p || s->nsources == MARKER_MAX_SOURCES) {
+            error_setg(errp, "%s: bad or too many sources", path);
+            return;
+        }
+        full = g_path_is_absolute(p) ? g_strdup(p) : g_strdup_printf("%s/%s", s->nand_dir, p);
+        s->source[s->nsources] = nand_open_backend(DEVICE(s), full, 0, errp);
+        if (!s->source[s->nsources]) {
+            return;
+        }
+        s->source_bytes[s->nsources] = blk_getlength(s->source[s->nsources]);
+        s->nsources++;
+    }
+}
+
+/*
+ * Serve a marker: if the logical page in lpn is one, replace it with the
+ * named block of the named source. A marker naming nothing readable is
+ * served as it is (and counted): the guest's file system then sees a bad
+ * block instead of the model hanging.
+ */
+static void nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
+{
+    uint32_t source, block, check;
+
+    if (!s->nsources || memcmp(lpn, s->marker_magic, MARKER_MAGIC_LEN)) {
+        return;
+    }
+    source = ldl_le_p(lpn + 16);
+    block = ldl_le_p(lpn + 20);
+    check = ldl_le_p(lpn + 24);
+    if ((source ^ block ^ s->marker_check) != check || source >= (uint32_t)s->nsources ||
+        (uint64_t)(block + 1) * s->marker_block > s->source_bytes[source] ||
+        blk_pread(s->source[source], (uint64_t)block * s->marker_block, s->marker_block, lpn, 0) < 0) {
+        s->markers_bad++;
+        return;
+    }
+    s->markers_served++;
 }
 
 /*
@@ -687,6 +804,9 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
         case FMI_OP_PPN_READ:
             if (nand_read_page(s, ch, ce, row, page, &erased)) {
                 for (k = first; k < first + count; k++) {
+                    if (!erased) {
+                        nand_serve_marker(s, page + k * lpn_bytes);
+                    }
                     seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, true);
                     seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, true);
                 }
@@ -752,6 +872,11 @@ static uint32_t fmi_single(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
     case FMI_OP_READ_SINGLE:
         ok = nand_read_page(s, ch, ce, row, page, &erased);
         if (ok) {
+            uint32_t k;
+
+            for (k = 0; !erased && k < g->page_bytes / g->lpn_bytes; k++) {
+                nand_serve_marker(s, page + k * g->lpn_bytes);
+            }
             iop_write(data, page, g->page_bytes);
             iop_write(meta, page + g->page_bytes, g->meta_bytes);
         }
@@ -1087,6 +1212,10 @@ static void s5l8940_iop_finalize(Object *obj)
                 blk_unref(s->chip[ch][ce]);
             }
         }
+    }
+    for (ch = 0; ch < s->nsources; ch++) {
+        blk_detach_dev(s->source[ch], DEVICE(s));
+        blk_unref(s->source[ch]);
     }
     timer_free(s->irq_timer);
     g_free(s->nand_dir);
