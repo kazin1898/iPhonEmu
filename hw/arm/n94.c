@@ -340,9 +340,20 @@ static void n94_init(MachineState *machine)
         }
     }
 
-    /* Samsung UARTs: uart0 is the kernel's console (-serial), uart1 its debug port. */
-    for (i = 0; i < 2; i++) {
-        exynos4210_uart_create(S5L8940_UART_BASE(i), 256, i, serial_hd(i),
+    /*
+     * Samsung UARTs, the four the N94 device tree has: uart0 is the kernel's
+     * console (-serial), uart1 its debug port (the second -serial); uart3
+     * (Bluetooth HCI) and uart5 (the gas gauge's HDQ) are silent: nothing is
+     * attached, as on the fork's A4 boards, but the block must exist, or
+     * AppleOnboardSerial's rx DMA path reads zeros where it expects FIFO
+     * status and panics on its queue accounting (AppleSimpleUARTSync.cpp:2177)
+     * when BlueTool opens uart3.
+     */
+    for (i = 0; i < 6; i++) {
+        if (i == 2 || i == 4) {
+            continue;
+        }
+        exynos4210_uart_create(S5L8940_UART_BASE(i), 256, i, i < 2 ? serial_hd(i) : NULL,
                                n94_irq(s, S5L8940_IRQ_UART(i)), true);
     }
 
