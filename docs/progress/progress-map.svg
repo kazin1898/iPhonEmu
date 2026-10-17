@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+<rect width="980" height="704" rx="8" fill="#0d1117"/>
+<text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
+<text x="20" y="46" fill="#8b949e">overall 34.1% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-17</text>
+<text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
+<text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
+<rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="108" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="108" fill="#8b949e" font-size="12">MSYS2 UCRT64, QEMU 11.0.3 links; MinGW fixes upstreamable</text>
+<text x="36" y="134" fill="#e6edf3">Firmware preparation (ios-prep)</text>
+<rect x="380" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="121" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="121" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="134" fill="#e6edf3" font-weight="600">90%</text>
+<text x="642" y="134" fill="#8b949e" font-size="12">IPSW to kboot, rootfs, PPN NAND image; boot logo and data volume pending</text>
+<text x="36" y="160" fill="#e6edf3">Boot to launchd (userland)</text>
+<rect x="380" y="147" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="147" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="147" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="147" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="147" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="147" width="18" height="16" rx="3" fill="#7bd389"/>
+<rect x="506" y="147" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="147" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="147" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="147" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="160" fill="#e6edf3" font-weight="600">55%</text>
+<text x="642" y="160" fill="#8b949e" font-size="12">M2 on the restore ramdisk; the real root from the NAND is B3</text>
+<text x="36" y="186" fill="#e6edf3">Storage: IOP, PPN NAND, FTL, NVRAM</text>
+<rect x="380" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="173" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="173" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="173" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="173" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="173" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="186" fill="#e6edf3" font-weight="600">60%</text>
+<text x="642" y="186" fill="#8b949e" font-size="12">FTL formats and opens, IONVRAM up; system volume (B3), effaceable + keybag (B4) open</text>
+<text x="36" y="212" fill="#e6edf3">Persistence (data volume, NVRAM across boots)</text>
+<rect x="380" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="199" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="212" fill="#e6edf3" font-weight="600">20%</text>
+<text x="642" y="212" fill="#8b949e" font-size="12">NAND overlay writes land; nothing survives a reinstall yet</text>
+<text x="20" y="238" fill="#c9d1d9" font-weight="600">Processor and platform</text>
+<text x="36" y="264" fill="#e6edf3">Cortex-A9 core, TCG</text>
+<rect x="380" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="251" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="251" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="251" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="264" fill="#e6edf3" font-weight="600">70%</text>
+<text x="642" y="264" fill="#8b949e" font-size="12">one core boots; second core, IPIs and SMP bring-up pending</text>
+<text x="36" y="290" fill="#e6edf3">Apple AIC and timers</text>
+<rect x="380" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="277" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="277" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="290" fill="#e6edf3" font-weight="600">80%</text>
+<text x="642" y="290" fill="#8b949e" font-size="12">vectors, masks, per-CPU timer FIQ; IPI and cpu1 timer open</text>
+<text x="36" y="316" fill="#e6edf3">PMGR clocks, GPIO, DWI, watchdog, PL310</text>
+<rect x="380" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="303" width="18" height="16" rx="3" fill="#7bd389"/>
+<rect x="506" y="303" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="303" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="303" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="303" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="316" fill="#e6edf3" font-weight="600">55%</text>
+<text x="642" y="316" fill="#8b949e" font-size="12">A4 models at A5 addresses; the A5 clock table is still the A4 map</text>
+<text x="36" y="342" fill="#e6edf3">PMU D1881, I2C, sensors</text>
+<rect x="380" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="329" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="329" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="329" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="329" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="329" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="342" fill="#e6edf3" font-weight="600">50%</text>
+<text x="642" y="342" fill="#8b949e" font-size="12">events, ADC, RTC, restart; ADC channels, wake events, gyro/accel calibration open</text>
+<text x="36" y="368" fill="#e6edf3">DMA (CDMA) and crypto (AES, SHA, PKE)</text>
+<rect x="380" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="355" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="355" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="355" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="355" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="368" fill="#e6edf3" font-weight="600">60%</text>
+<text x="642" y="368" fill="#8b949e" font-size="12">CDMA + AES filter from the A4; SHA-2 block new, untouched by the kernel so far</text>
+<text x="36" y="394" fill="#e6edf3">USB (OTG device, EHCI/OHCI, HSIC)</text>
+<rect x="380" y="381" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="381" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="381" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="381" width="18" height="16" rx="3" fill="#7bd389"/>
+<rect x="464" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="381" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="394" fill="#e6edf3" font-weight="600">35%</text>
+<text x="642" y="394" fill="#8b949e" font-size="12">blocks wired, OTG enumerates endpoints; usbmux/AFC and HSIC devices pending</text>
+<text x="20" y="420" fill="#c9d1d9" font-weight="600">Video and input</text>
+<text x="36" y="446" fill="#e6edf3">Display pipe + CLCD + MIPI-DSI, 640x960 panel</text>
+<rect x="380" y="433" width="18" height="16" rx="3" fill="#7bd389"/>
+<rect x="401" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="433" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="446" fill="#e6edf3" font-weight="600">5%</text>
+<text x="642" y="446" fill="#8b949e" font-size="12">A4 models exist to reuse; nothing drawn yet (M3)</text>
+<text x="36" y="472" fill="#e6edf3">GPU: GL bridge on Windows (ANGLE)</text>
+<rect x="380" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="459" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="472" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="472" fill="#8b949e" font-size="12">the fork&#x27;s host executor is macOS-only; an EGL/ANGLE backend is new work</text>
+<text x="36" y="498" fill="#e6edf3">Multitouch (SPI) and buttons</text>
+<rect x="380" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="485" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="498" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="498" fill="#8b949e" font-size="12">A4 digitizer models to adapt; n94 profile unknown</text>
+<text x="36" y="524" fill="#e6edf3">Audio (I2S, CS42L63, AE2)</text>
+<rect x="380" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="511" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="524" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="524" fill="#8b949e" font-size="12">ae2 hidden; no sound path</text>
+<text x="20" y="550" fill="#c9d1d9" font-weight="600">Radios (stubs)</text>
+<text x="36" y="576" fill="#e6edf3">Wi-Fi over HSIC, Bluetooth, baseband</text>
+<rect x="380" y="563" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="563" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="576" fill="#e6edf3" font-weight="600">10%</text>
+<text x="642" y="576" fill="#8b949e" font-size="12">baseband unmatched, HSIC ports time out cleanly; stubs for M4</text>
+<text x="20" y="602" fill="#c9d1d9" font-weight="600">Product</text>
+<text x="36" y="628" fill="#e6edf3">Speed: 1:1 with a real 4S on PC</text>
+<rect x="380" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="628" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="628" fill="#8b949e" font-size="12">MTTCG, WFI, profiling; measured after M3</text>
+<text x="36" y="654" fill="#e6edf3">iPhonEmu.exe (open IPSW, prepare, boot)</text>
+<rect x="380" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="641" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="654" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="654" fill="#8b949e" font-size="12">after M4</text>
+<text x="36" y="680" fill="#e6edf3">Android build (arm64 host, native GLES)</text>
+<rect x="380" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="401" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="422" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="443" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="464" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="485" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="527" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="548" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="569" y="667" width="18" height="16" rx="3" fill="#30363d"/>
+<text x="598" y="680" fill="#e6edf3" font-weight="600">0%</text>
+<text x="642" y="680" fill="#8b949e" font-size="12">after the PC is stable</text>
+</svg>

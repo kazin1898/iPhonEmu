@@ -12,6 +12,37 @@ that this project started as lives on the `s5lbox-3g` branch.
 
 ## Status
 
+<!-- progress:start -->
+![overall](https://img.shields.io/badge/overall-34.1%25-orange) ![milestones](https://img.shields.io/badge/milestones-1%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-17-lightgrey)
+
+[![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
+
+Milestones: ✅ M1 serial console · ⬜ M2 launchd and daemons · ⬜ M3 Setup / lock screen · ⬜ M4 home screen and apps. History: `docs/progress/history.md`. Figures are estimates of work done toward the
+goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_map.py` regenerates this block.
+
+| Area | Progress | |
+|---|---|---|
+| System: Toolchain and Windows build | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
+| System: Firmware preparation (ios-prep) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | 90% |
+| System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |
+| System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
+| System: Persistence (data volume, NVRAM across boots) | 🟩🟩⬜⬜⬜⬜⬜⬜⬜⬜ | 20% |
+| Processor and platform: Cortex-A9 core, TCG | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | 70% |
+| Processor and platform: Apple AIC and timers | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | 80% |
+| Processor and platform: PMGR clocks, GPIO, DWI, watchdog, PL310 | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |
+| Processor and platform: PMU D1881, I2C, sensors | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | 50% |
+| Processor and platform: DMA (CDMA) and crypto (AES, SHA, PKE) | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
+| Processor and platform: USB (OTG device, EHCI/OHCI, HSIC) | 🟩🟩🟩🟨⬜⬜⬜⬜⬜⬜ | 35% |
+| Video and input: Display pipe + CLCD + MIPI-DSI, 640x960 panel | 🟨⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 5% |
+| Video and input: GPU: GL bridge on Windows (ANGLE) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Video and input: Multitouch (SPI) and buttons | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Video and input: Audio (I2S, CS42L63, AE2) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Radios (stubs): Wi-Fi over HSIC, Bluetooth, baseband | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 10% |
+| Product: Speed: 1:1 with a real 4S on PC | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Product: iPhonEmu.exe (open IPSW, prepare, boot) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Product: Android build (arm64 host, native GLES) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+<!-- progress:end -->
+
 | Phase | Goal | State |
 |---|---|---|
 | 0 | Repository on the qemu-ios fork, Windows build of `qemu-system-arm` (MSYS2 UCRT64) | done 2026-10-16: QEMU 11.0.3 builds and lists the eight qemu-ios machines |

@@ -1,0 +1,7 @@
+# Progress history
+
+One row per regeneration of the progress map.
+
+| Date | Overall | Non-zero areas |
+|---|---|---|
+| 2026-10-17 | 34.1% | Toolchain and Windows build 100%, Firmware preparation (ios-prep) 90%, Boot to launchd (userland) 55%, Storage: IOP, PPN NAND, FTL, NVRAM 60%, Persistence (data volume, NVRAM across boots) 20%, Cortex-A9 core, TCG 70%, Apple AIC and timers 80%, PMGR clocks, GPIO, DWI, watchdog, PL310 55%, PMU D1881, I2C, sensors 50%, DMA (CDMA) and crypto (AES, SHA, PKE) 60%, USB (OTG device, EHCI/OHCI, HSIC) 35%, Display pipe + CLCD + MIPI-DSI, 640x960 panel 5%, Wi-Fi over HSIC, Bluetooth, baseband 10% |
