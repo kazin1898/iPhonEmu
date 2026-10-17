@@ -144,7 +144,9 @@ typedef struct CDMASource {
 
 struct S5L8930CDMAState {
     SysBusDevice parent_obj;
+    uint64_t dram_base;         /* property: where DRAM sits (the A4's 0x40000000, the A5's 0x80000000) */
     uint64_t dram_size;         /* property: device FIFO vs memory is by address */
+    uint32_t uart_base;         /* property: uart0's block; uart n at + n MiB */
     MemoryRegion cdma_mem;
     MemoryRegion aes_mem;
     qemu_irq irq[CDMA_CHANNELS];
@@ -426,17 +428,17 @@ static uint32_t fifo_pop(S5L8930CDMAState *s, uint8_t *buf, uint32_t len)
  * registers its URXH as a source instead (s5l8920.c's Bluetooth HCI) and
  * the chain is paced by its receive FIFO like the FMI's.
  */
-static bool cdma_waits_for_uart(const CDMAChannel *c)
+static bool cdma_waits_for_uart(S5L8930CDMAState *s, const CDMAChannel *c)
 {
     return !(c->settings & SET_TO_DEVICE) &&
-           c->fifo >= S5L8930_UART_BASE(0) && c->fifo < S5L8930_UART_BASE(6) &&
+           c->fifo >= s->uart_base && c->fifo < s->uart_base + 6 * 0x100000 &&
            (c->fifo & 0xfffff) == 0x24;
 }
 
 static bool cdma_is_memory(S5L8930CDMAState *s, uint32_t addr)
 {
-    return addr >= S5L8930_DRAM_BASE &&
-           addr < S5L8930_DRAM_BASE + s->dram_size;
+    return addr >= s->dram_base &&
+           addr < s->dram_base + s->dram_size;
 }
 
 static void cdma_fifo_xfer(uint32_t fifo, uint32_t width, uint8_t *buf,
@@ -922,7 +924,7 @@ static void cdma_write(void *opaque, hwaddr offset, uint64_t value,
                         "desc 0x%x\n", qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1e9,
                         ch, v, c->settings, c->fifo, c->desc);
             }
-            if (cdma_waits_for_uart(c) && !cdma_src(s, c->fifo)) {
+            if (cdma_waits_for_uart(s, c) && !cdma_src(s, c->fifo)) {
                 uint32_t d[4];
 
                 /* Parked on the first segment: stopping it checks MAR/BC. */
@@ -1208,7 +1210,9 @@ static void s5l8930_cdma_finalize(Object *obj)
 
 static const Property s5l8930_cdma_properties[] = {
     DEFINE_PROP_STRING("gid-blobs", S5L8930CDMAState, gid_path),
+    DEFINE_PROP_UINT64("dram-base", S5L8930CDMAState, dram_base, S5L8930_DRAM_BASE),   /* the SoC's */
     DEFINE_PROP_UINT64("dram-size", S5L8930CDMAState, dram_size, S5L8930_DRAM_SIZE),   /* the board's */
+    DEFINE_PROP_UINT32("uart-base", S5L8930CDMAState, uart_base, S5L8930_UART_BASE(0)),
     DEFINE_PROP_UINT8("version", S5L8930CDMAState, version, 2),
     DEFINE_PROP_UINT32("paced-base", S5L8930CDMAState, paced_base, S5L8930_I2S_BASE(0)),
     DEFINE_PROP_UINT32("paced-ports", S5L8930CDMAState, paced_ports, 3),

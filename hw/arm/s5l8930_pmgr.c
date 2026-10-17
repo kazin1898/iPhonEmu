@@ -41,10 +41,15 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8930PMGRState, S5L8930_PMGR)
 #define DPSM_END            0x140
 #define DPSM_BUSY           (0x40000000u | 0x200u)
 
-/* Gate n at 0x1010 + 4n: bits 0-3 request, 4-7 actual, bit 31 reset pulse. */
+/* Gate n at 0x1010 + 4n: bits 0-3 request, 4-7 actual, bit 31 reset pulse. The A4 has 0x40 gates;
+ * the A5 ("gates" property) reaches 0x1180 and polls gate 0x44 at boot. */
 #define GATE_START          0x1010
-#define GATE_END            (GATE_START + 4 * 0x40)
+#define GATE_END(s)         (GATE_START + 4 * (s)->gates)
 #define GATE_RESET          (1u << 31)
+
+/* The A5's second bank of clock-config registers ("clkcfg-hi"): the same busy bit. */
+#define CLKCFG_HI_START     0x200
+#define CLKCFG_HI_END       0x300
 
 #define PMGR_GATE_CTL       0x1200
 #define PMGR_TICKS_LO       0x2000
@@ -82,6 +87,8 @@ struct S5L8930PMGRState {
     uint32_t regs[S5L8930_PMGR_SIZE / 4];
     uint8_t security_epoch;     /* POWER_ID[31:24] LLB would latch; 0 = measured */
     uint8_t board_id;           /* POWER_ID[23:16], the board straps */
+    uint32_t gates;             /* "gates": clock gates at 0x1010 (A4 0x40, A5 more) */
+    bool clkcfg_hi;             /* "clkcfg-hi": 0x200-0x300 are clock configs too (A5) */
     int64_t tick_base_ns;
     bool keep_timebase;         /* "keep-timebase": the next reset is the AP's wake, see reset */
     S5L8930EventTimer evt[2];
@@ -153,11 +160,18 @@ static const struct {
     { PMGR_POWER_ID, 0x01000001 },   /* measured on a real K48AP (epoch 1); board-id ORed in */
 };
 
-static bool pmgr_modeled(hwaddr off)
+static bool pmgr_clkcfg(S5L8930PMGRState *s, hwaddr off)
+{
+    return (off >= CLKCFG_START && off < CLKCFG_END) ||
+           (s->clkcfg_hi && off >= CLKCFG_HI_START && off < CLKCFG_HI_END);
+}
+
+static bool pmgr_modeled(S5L8930PMGRState *s, hwaddr off)
 {
     return off < PLL_END ||
            (off >= CLKCFG_START && off < DPSM_END) ||
-           (off >= GATE_START && off < GATE_END) ||
+           pmgr_clkcfg(s, off) ||
+           (off >= GATE_START && off < GATE_END(s)) ||
            off == PMGR_GATE_CTL ||
            (off >= PMGR_TICKS_LO && off <= PMGR_WDOG_CTL) ||
            off == PMGR_CLOCK_CON1 || off == PMGR_POWER_ID;
@@ -261,7 +275,7 @@ static uint64_t s5l8930_pmgr_read(void *opaque, hwaddr off, unsigned size)
     S5L8930PMGRState *s = opaque;
     uint32_t val = s->regs[off / 4];
 
-    if (!pmgr_modeled(off)) {
+    if (!pmgr_modeled(s, off)) {
         qemu_log_mask(LOG_UNIMP, "%s: unmodeled read 0x%04x\n",
                       __func__, (unsigned)off);
         return val;
@@ -292,7 +306,7 @@ static uint64_t s5l8930_pmgr_read(void *opaque, hwaddr off, unsigned size)
         return (val & PLL_CON0_ENABLE) ? val | PLL_CON0_LOCKED
                                        : val & ~PLL_CON0_LOCKED;
     }
-    if (off >= CLKCFG_START && off < CLKCFG_END) {
+    if (pmgr_clkcfg(s, off)) {
         return val & ~CLKCFG_BUSY;
     }
     if (off >= DPSM_START && off < DPSM_END) {
@@ -307,7 +321,7 @@ static void s5l8930_pmgr_write(void *opaque, hwaddr off, uint64_t val64,
     S5L8930PMGRState *s = opaque;
     uint32_t val = val64;
 
-    if (!pmgr_modeled(off)) {
+    if (!pmgr_modeled(s, off)) {
         qemu_log_mask(LOG_UNIMP, "%s: unmodeled write 0x%04x <- 0x%08x\n",
                       __func__, (unsigned)off, val);
         s->regs[off / 4] = val;
@@ -350,7 +364,7 @@ static void s5l8930_pmgr_write(void *opaque, hwaddr off, uint64_t val64,
     }
     if (off < PLL_END && !(off & 4)) {
         val &= ~PLL_CON0_UPDATE;
-    } else if (off >= GATE_START && off < GATE_END) {
+    } else if (off >= GATE_START && off < GATE_END(s)) {
         /* Settle at once: actual (4-7) follows request (0-3), and the
          * reset pulse is over as soon as it is written. */
         val = (val & ~(GATE_RESET | 0xF0)) | ((val & 0xF) << 4);
@@ -388,7 +402,12 @@ static void s5l8930_pmgr_reset(DeviceState *dev)
     for (i = CLKCFG_START; i < CLKCFG_END; i += 4) {
         s->regs[i / 4] |= 0x80000000;
     }
-    for (i = GATE_START; i < GATE_END; i += 4) {
+    if (s->clkcfg_hi) {
+        for (i = CLKCFG_HI_START; i < CLKCFG_HI_END; i += 4) {
+            s->regs[i / 4] |= 0x80000000;
+        }
+    }
+    for (i = GATE_START; i < GATE_END(s); i += 4) {
         s->regs[i / 4] = 0xFF;
     }
 
@@ -500,6 +519,8 @@ static const VMStateDescription vmstate_s5l8930_pmgr = {
 static const Property s5l8930_pmgr_props[] = {
     DEFINE_PROP_UINT8("security-epoch", S5L8930PMGRState, security_epoch, 0),
     DEFINE_PROP_UINT8("board-id", S5L8930PMGRState, board_id, 0x02),   /* K48 */
+    DEFINE_PROP_UINT32("gates", S5L8930PMGRState, gates, 0x40),
+    DEFINE_PROP_BOOL("clkcfg-hi", S5L8930PMGRState, clkcfg_hi, false),
 };
 
 static void s5l8930_pmgr_class_init(ObjectClass *klass, const void *data)
