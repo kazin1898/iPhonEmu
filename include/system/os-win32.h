@@ -196,6 +196,10 @@ int qemu_close_socket_osfhandle(int fd);
 #define close qemu_close_wrap
 int qemu_close_wrap(int fd);
 
+/* GNU memmem(), which mingw-w64's CRT lacks (util/oslib-win32.c). */
+void *memmem(const void *haystack, size_t haystack_len,
+             const void *needle, size_t needle_len);
+
 #undef connect
 #define connect qemu_connect_wrap
 int qemu_connect_wrap(int sockfd, const struct sockaddr *addr,

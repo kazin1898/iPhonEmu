@@ -87,6 +87,7 @@ typedef struct IPodTouchFMSSState
      * an fopen/fread/fclose for every 4 KB the guest reads. NULL means the base
      * is still a directory of .page files.
      */
+    GMappedFile *packed_map;        /* owns `packed`; kept for the device's lifetime */
     const uint8_t *packed;
     size_t packed_size;
     const uint32_t *packed_index;   /* num_cs * pages_per_cs, 1-based, 0 = absent */

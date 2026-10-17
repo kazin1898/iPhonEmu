@@ -14,8 +14,8 @@ that this project started as lives on the `s5lbox-3g` branch.
 
 | Phase | Goal | State |
 |---|---|---|
-| 0 | Repository on the qemu-ios fork, Windows build of `qemu-system-arm` (MSYS2 UCRT64) | in progress |
-| 1 | `tools/ios-prep`: IPSW to kernel bundle (kernel, device tree, rootfs); A5 hardware inventory | tool written, inventory in `docs/n94/` |
+| 0 | Repository on the qemu-ios fork, Windows build of `qemu-system-arm` (MSYS2 UCRT64) | done 2026-10-16: QEMU 11.0.3 builds and lists the eight qemu-ios machines |
+| 1 | `tools/ios-prep`: IPSW to kernel bundle (kernel, device tree, rootfs); A5 hardware inventory | done: `kboot.bin` builds, inventory in `docs/n94/` |
 | 2 | `-M iPhone-4S` skeleton: Cortex-A9, 512 MiB at 0x80000000, Apple AIC, timers, UART. **M1:** kernel console on the serial port | not started |
 | 3 | Platform bring-up to `launchd` (**M2**) | not started |
 | 4 | Display pipe at 640x960 and the GL bridge (**M3:** Setup or lock screen) | not started |
@@ -45,9 +45,22 @@ the `cryptography` package are the only requirements; it runs on Windows.
 
 ## Building
 
-QEMU's build system is unchanged: `configure --target-list=arm-softmmu` and `ninja`. On Windows use
-MSYS2's UCRT64 environment, the toolchain QEMU supports there. `RUNNING.md` and the upstream README
-(`docs/qemu-ios-README.md`) describe the macOS build and the other boards.
+QEMU's build system is unchanged. On Windows use MSYS2's UCRT64 environment (a portable one in a
+folder works: extract `msys2-base-x86_64-*.sfx.exe`, `pacman -Syuu`, then the `mingw-w64-ucrt-x86_64-`
+packages `toolchain glib2 pixman SDL2 SDL2_image libslirp ninja meson python pkgconf zlib zstd lzo2
+snappy libjpeg-turbo libpng curl gnutls nettle dtc capstone angleproject libusb ffmpeg`). The fork's
+PKE/AES models link OpenSSL, so pass it explicitly:
+
+```
+mkdir build && cd build
+../configure --target-list=arm-softmmu --enable-sdl --disable-werror --disable-docs \
+    --disable-guest-agent --extra-ldflags=-lcrypto
+ninja qemu-system-arm.exe
+```
+
+`build/qemu-system-arm.exe -M help` then lists the qemu-ios boards. Developer Mode is not needed:
+the install bundle falls back to copies where Windows refuses symbolic links. `RUNNING.md` and the
+upstream README (`docs/qemu-ios-README.md`) describe the macOS build and the other boards.
 
 ## Credits
 

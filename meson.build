@@ -1326,6 +1326,9 @@ if not get_option('slirp').auto() or have_system
   if slirp.found() and not cc.has_function('slirp_set_dns_forward', dependencies: slirp,
                                            prefix: '#include <libslirp.h>')
     slirp = subproject('slirp', default_options: ['default_library=static']).get_variable('libslirp_libdep')
+    # libslirp.h marks its API __declspec(dllimport) on Windows unless told the
+    # library is static; without this the link wants __imp_slirp_* symbols.
+    slirp = declare_dependency(compile_args: ['-DLIBSLIRP_STATIC'], dependencies: slirp)
   endif
 endif
 

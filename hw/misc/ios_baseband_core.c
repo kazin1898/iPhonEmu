@@ -1055,10 +1055,23 @@ static void nitz_report(IosBbCore *bb)
     if (!bb->nitz || !bb->ctzr_on || !bb->ch[bb->ctzr_ch].open) {
         return;
     }
+    long gmtoff;
+
     gmtime_r(&secs, &utc);
     localtime_r(&secs, &local);
+#ifdef _WIN32
+    /* No tm_gmtoff on Windows: mktime() reads a broken-down time as local, so
+     * feeding it the UTC fields (with the local DST flag) yields secs - offset. */
+    {
+        struct tm u = utc;
+        u.tm_isdst = local.tm_isdst;
+        gmtoff = (long)difftime(secs, mktime(&u));
+    }
+#else
+    gmtoff = local.tm_gmtoff;
+#endif
     chan_printf(bb, bb->ctzr_ch, "\r\n+CTZV: %ld,\"%02d/%02d/%02d,%02d:%02d:%02d\"\r\n",
-                (long)(local.tm_gmtoff / 900), utc.tm_year % 100, utc.tm_mon + 1, utc.tm_mday,
+                gmtoff / 900, utc.tm_year % 100, utc.tm_mon + 1, utc.tm_mday,
                 utc.tm_hour, utc.tm_min, utc.tm_sec);
 }
 

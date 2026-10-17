@@ -6,7 +6,6 @@
 #include "qemu/error-report.h"
 #include "system/runstate.h"
 #include "system/address-spaces.h"
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include "trace.h"
 #include "hw/trace-printf.h"
@@ -687,28 +686,29 @@ static void fmss_try_map_packed(IPodTouchFMSSState *s)
 {
     static const char magic[8] = "ITNAND01";
     struct stat st;
+    GMappedFile *map;
+    GError *gerr = NULL;
     const uint8_t *p;
+    size_t size;
     uint32_t page_size, spare_size;
     size_t index_bytes;
-    int fd;
 
     if (!s->nand_path || stat(s->nand_path, &st) != 0 || !S_ISREG(st.st_mode)) {
         return;                       /* a directory, or nothing: legacy path */
     }
 
-    fd = open(s->nand_path, O_RDONLY);
-    if (fd < 0) {
+    /* GMappedFile is mmap on POSIX and a file mapping on Windows (no <sys/mman.h> there). */
+    map = g_mapped_file_new(s->nand_path, FALSE, &gerr);
+    if (!map) {
+        g_error_free(gerr);
         return;
     }
-    p = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);                        /* the mapping keeps its own reference */
-    if (p == MAP_FAILED) {
-        return;
-    }
+    p = (const uint8_t *)g_mapped_file_get_contents(map);
+    size = g_mapped_file_get_length(map);
 
-    if ((size_t)st.st_size < 24 || memcmp(p, magic, sizeof(magic)) != 0) {
+    if (!p || size < 24 || memcmp(p, magic, sizeof(magic)) != 0) {
         fprintf(stderr, "[fmss] %s is not a packed NAND image\n", s->nand_path);
-        munmap((void *)p, st.st_size);
+        g_mapped_file_unref(map);
         return;
     }
 
@@ -718,7 +718,7 @@ static void fmss_try_map_packed(IPodTouchFMSSState *s)
         fprintf(stderr, "[fmss] %s has %u+%u byte pages, expected %u+%u\n",
                 s->nand_path, page_size, spare_size,
                 NAND_BYTES_PER_PAGE, NAND_BYTES_PER_SPARE);
-        munmap((void *)p, st.st_size);
+        g_mapped_file_unref(map);
         return;
     }
 
@@ -734,19 +734,20 @@ static void fmss_try_map_packed(IPodTouchFMSSState *s)
      * the mapping and took SIGBUS -- the whole app, during boot, with nothing
      * to suggest the image was the problem.
      */
-    if (index_bytes > (size_t)st.st_size - 24) {
+    if (index_bytes > size - 24) {
         fprintf(stderr, "[fmss] packed NAND %s is truncated (index wants %zu of "
                 "%zu bytes); ignoring it\n", s->nand_path, index_bytes,
-                (size_t)st.st_size - 24);
-        munmap(p, st.st_size);
+                size - 24);
+        g_mapped_file_unref(map);
         return;
     }
 
+    s->packed_map = map;
     s->packed = p;
-    s->packed_size = st.st_size;
+    s->packed_size = size;
     s->packed_index = (const uint32_t *)(p + 24);
     s->packed_records = p + 24 + index_bytes;
-    s->packed_record_count = ((size_t)st.st_size - 24 - index_bytes)
+    s->packed_record_count = (size - 24 - index_bytes)
                              / (NAND_BYTES_PER_PAGE + NAND_BYTES_PER_SPARE);
 
     fprintf(stderr, "[fmss] mapped packed NAND %s (%u cs x %u pages, %zu MiB)\n",

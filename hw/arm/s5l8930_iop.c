@@ -1709,6 +1709,9 @@ static void s5l8930_iop_realize(DeviceState *dev, Error **errp)
     /* Make the fixed filenames/format marker durable before any ownership
      * can reference them. Operations never create new entries afterward. */
     const char *write_dir = s->overlay_dir ? s->overlay_dir : s->nand_dir;
+#ifndef _WIN32
+    /* Windows has no O_DIRECTORY and no fsync of a directory: NTFS journals
+     * the directory entries itself, so the durability step is POSIX-only. */
     int dirfd = open(write_dir, O_RDONLY | O_DIRECTORY);
     if (dirfd < 0 || fsync(dirfd) < 0) {
         error_setg_errno(errp, errno, "cannot sync NAND directory %s", write_dir);
@@ -1718,6 +1721,9 @@ static void s5l8930_iop_realize(DeviceState *dev, Error **errp)
         return;
     }
     close(dirfd);
+#else
+    (void)write_dir;
+#endif
     s->vm_state_entry = qemu_add_vm_change_state_handler(iop_vm_state, s);
 }
 

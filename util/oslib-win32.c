@@ -932,3 +932,27 @@ int qemu_ftruncate64(int fd, int64_t length)
     SetFilePointer(h, li.LowPart, &li.HighPart, FILE_BEGIN);
     return res ? 0 : -1;
 }
+
+/*
+ * GNU memmem() for mingw-w64, whose CRT has none. The device models that
+ * scan firmware images for markers use it (hw/arm/s5l8930_iop.c, it_iboot.c).
+ */
+void *memmem(const void *haystack, size_t haystack_len,
+             const void *needle, size_t needle_len)
+{
+    const char *h = haystack;
+    const char *n = needle;
+
+    if (needle_len == 0) {
+        return (void *)h;
+    }
+    if (haystack_len < needle_len) {
+        return NULL;
+    }
+    for (size_t i = 0; i + needle_len <= haystack_len; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, needle_len) == 0) {
+            return (void *)(h + i);
+        }
+    }
+    return NULL;
+}

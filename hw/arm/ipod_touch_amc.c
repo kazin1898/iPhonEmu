@@ -322,6 +322,10 @@ static void amc_decoder_close(IPodTouchAMCState *s)
     }
 }
 
+#endif /* IT_HAVE_AVCODEC */
+
+/* The address checks serve engine 0's list walk too, which runs with or
+ * without the decoder HLE, so they sit outside the avcodec region. */
 static bool amc_dram(IPodTouchAMCState *s, uint32_t addr, size_t size)
 {
     return addr >= s->dram_base && addr - s->dram_base < s->dram_size &&
@@ -334,6 +338,8 @@ static bool amc_local(IPodTouchAMCState *s, uint32_t addr, size_t size)
     uint32_t limit = s->rev21 ? AMC_APERTURE_21 : AMC_BUF_SIZE;
     return addr < limit && size <= limit - addr;
 }
+
+#ifdef IT_HAVE_AVCODEC
 
 /*
  * A bank 4 DMA address: bits 1:0 of a descriptor pointer tag its space,
