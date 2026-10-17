@@ -1,0 +1,1288 @@
+/
+    compatible                     'N94AP' | 'iPhone4,1' | 'AppleARM'
+    secure-root-prefix             'md'
+    AAPL,phandle                   {0x1000000}
+    config-number                  {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    model-number                   {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    firmware-min-capacity          {0x180000}
+    platform-name                  {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    device_type                    'bootrom'
+    #size-cells                    {0x1}
+    clock-frequency                {0x0}
+    mlb-serial-number              {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    manufacturer                   'Apple Inc.'
+    #address-cells                 {0x1}
+    region-info                    {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    serial-number                  {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    model                          'iPhone4,1'
+/chosen
+    firmware-version               <256 bytes> 000000000000000000000000000000000000000000000000...
+    display-scale                  {0x0}
+    #address-cells                 {0x1}
+    nvram-proxy-data               <8192 bytes> 000000000000000000000000000000000000000000000000...
+    system-trusted                 {0x0}
+    AAPL,phandle                   {0x2000000}
+    production-cert                {0x0}
+    dram-vendor                    {0x0, 0x0, 0x0, 0x0}
+    gid-aes-key                    {0x0}
+    uid-aes-key                    {0x0}
+    random-seed                    <2 bytes> 0000
+    debug-enabled                  {0x0}
+    display-rotation               {0x0}
+    root-matching                  <256 bytes> 000000000000000000000000000000000000000000000000...
+    die-id                         {0x0, 0x0}
+    root-ticket-hash               {0x0, 0x0, 0x0, 0x0, 0x0}
+    bootp-response                 <300 bytes> 000000000000000000000000000000000000000000000000...
+    board-id                       {0x0}
+    secure-boot                    {0x0}
+    development-cert               {0x0}
+    software-bundle-version        {0x0, 0x0, 0x0, 0x0}
+    software-behavior              {0x0, 0x0, 0x0, 0x0}
+    chip-id                        {0x0}
+    unique-chip-id                 {0x0, 0x0}
+/chosen/memory-map
+    MemoryMapReserved-14           {0x0, 0x0}
+    MemoryMapReserved-5            {0x0, 0x0}
+    MemoryMapReserved-11           {0x0, 0x0}
+    MemoryMapReserved-0            {0x0, 0x0}
+    MemoryMapReserved-6            {0x0, 0x0}
+    AAPL,phandle                   {0x3000000}
+    MemoryMapReserved-15           {0x0, 0x0}
+    MemoryMapReserved-1            {0x0, 0x0}
+    MemoryMapReserved-7            {0x0, 0x0}
+    MemoryMapReserved-12           {0x0, 0x0}
+    MemoryMapReserved-2            {0x0, 0x0}
+    MemoryMapReserved-8            {0x0, 0x0}
+    MemoryMapReserved-3            {0x0, 0x0}
+    MemoryMapReserved-9            {0x0, 0x0}
+    MemoryMapReserved-10           {0x0, 0x0}
+    MemoryMapReserved-13           {0x0, 0x0}
+    MemoryMapReserved-4            {0x0, 0x0}
+/chosen/iBoot
+    AAPL,phandle                   {0x4000000}
+    populate-registry-time         {0x0}
+    load-kernel-start              {0x0}
+    start-time                     {0x0}
+    debug-wait-start               {0x0}
+/options
+    AAPL,phandle                   {0x5000000}
+/cpus
+    #address-cells                 {0x1}
+    #size-cells                    {0x0}
+    AAPL,phandle                   {0x6000000}
+/cpus/cpu0
+    AAPL,phandle                   {0x7000000}
+    fixed-frequency                {0x0}
+    bus-frequency                  {0x0}
+    cpu-version                    {0x0}
+    function-platform_cache        {0x12000000, 0x706d7463}
+    memory-frequency               {0x0}
+    interrupt-parent               {0xe000000}
+    state                          'running'
+    compatible                     'ARM,cortex-a9' | 'ARM,v7'
+    peripheral-frequency           {0x0}
+    interrupts                     {0xc0, 0x87, 0xc1}
+    timebase-frequency             {0x0}
+    function-enable_core           {0x10000000, 0x436f7265, 0x1}
+    clock-frequency                {0x0}
+    function-ipi_dispatch          {0xe000000, 0x49504944, 0xc0}
+    function-ipi_dispatch_other    {0xe000000, 0x49504944, 0xc1}
+    function-cpu_idle              {0x10000000, 0x63707549}
+    device_type                    'cpu'
+    reg                            {0x0}
+/cpus/cpu1
+    state                          'waiting'
+    function-cpu_idle              {0x10000000, 0x63707549}
+    compatible                     'ARM,cortex-a9' | 'ARM,v7'
+    interrupt-parent               {0xe000000}
+    interrupts                     {0xc2, 0x8b, 0xc3}
+    reg                            {0x1}
+    function-platform_cache        {0x12000000, 0x706d7463}
+    AAPL,phandle                   {0x8000000}
+    device_type                    'cpu'
+    function-ipi_dispatch_other    {0xe000000, 0x49504944, 0xc3}
+    function-ipi_dispatch          {0xe000000, 0x49504944, 0xc2}
+    function-enable_core           {0x10000000, 0x436f7265, 0x2}
+/aliases
+    AAPL,phandle                   {0x9000000}
+/memory
+    AAPL,phandle                   {0xa000000}
+    device_type                    'memory'
+    reg                            {0x0, 0x0}
+/pram
+    AAPL,phandle                   {0xb000000}
+    device_type                    'pram'
+    reg                            {0x0, 0x0}
+/vram
+    AAPL,phandle                   {0xc000000}
+    device_type                    'vram'
+    reg                            {0x0, 0x0}
+/arm-io
+    compatible                     'arm-io,s5l8940x'
+    clock-frequencies              <256 bytes> 000000000000000000000000000000000000000000000000...
+    interrupt-parent               {0xe000000}
+    interrupts                     '|' | '' | '' | '}'
+    bus-timeout                    {0x7fffff}
+    chip-revision                  {0x0}
+    iommu-present                  <empty>
+    reg                            {0x3fb00000, 0x1000, 0x3fc00000, 0x1000}
+    device_type                    's5l8940x-io'
+    #size-cells                    {0x1}
+    ranges                         {0x0, 0x30000000, 0x10000000}
+    AAPL,phandle                   {0xd000000}
+    #address-cells                 {0x1}
+    usbphy-frequency               {0x0}
+    function-clock_gate            {0x10000000, 0x636c6b47}
+    hsic-enabled                   <empty>
+    function-power_gate            {0x10000000, 0x70777247}
+/arm-io/aic
+    #main-cpus                     {0x2}
+    compatible                     'aic,1'
+    interrupt-controller           'master'
+    #interrupt-cells               {0x1}
+    AAPL,phandle                   {0xe000000}
+    ipid-mask                      {0xf, 0x0, 0x0, 0x0, 0x0, 0x0}
+    target-destinations            {0x87, 0x1, 0x8b, 0x2}
+    #address-cells                 {0x0}
+    device_type                    'interrupt-controller'
+    reg                            {0xf200000, 0x10000}
+/arm-io/gpio
+    #interrupt-cells               {0x2}
+    interrupt-controller           <empty>
+    compatible                     'gpio,s5l8940x' | 'gpio,s5l8930x'
+    interrupt-parent               {0xe000000}
+    interrupts                     'w'
+    reg                            {0xfa00000, 0x1000}
+    #interrupt-groups              {0x8}
+    AAPL,phandle                   {0xf000000}
+    device_type                    'interrupt-controller'
+    #address-cells                 {0x0}
+    #gpio-ports                    {0x1c}
+/arm-io/pmgr
+    dvc-active-timeout             {0xfa0}
+    voltage-states0                {0x2, 0x1}
+    pdmvr-rules                    {0x1010001}
+    function-voltage_domain1       {0x3b000000, 0x64776956, 0x5e0000}
+    firmware-m-perf-states         {0x2, 0x3, 0x4, 0x5}
+    bridge-settings                <512 bytes> 000000000000000000000000000000000000000000000000...
+    cpu-clk-cfgs                   {0x0, 0x0, 0x0}
+    dvb-boost-timeout              {0xfa0}
+    ema-settings1                  {0x14000, 0x1, 0x0, 0x0}
+    function-voltage_domain0       {0x3b000000, 0x64776956, 0x5e0002}
+    clock-gates                    'y' | '' | '' | 'z'
+    nominal-performance1           {0x14000}
+    dvb-thermal-period             {0xf4240}
+    performance-domain-features    {0x10001, 0x10300}
+    dvc-grace-period               'd'
+    device-clocks-min              '8'
+    AAPL,phandle                   {0x10000000}
+    dvd-period                     {0x1f40}
+    dvb-relax-timeout              {0x2ee0}
+    voltage-states1                {0x0, 0x0, 0x0}
+    clock-ids                      {0x13c, 0x13d}
+    nominal-performance0           {0x1}
+    device_type                    'timer'
+    compatible                     'pmgr,s5l8940x'
+    firmware-p-perf-state          {0x5}
+    boost-performance1             {0x10000}
+    #performance-domains           {0x2}
+    device-clocks-max              {0x80}
+    #bridges                       {0x3}
+    dvd-threshold                  {0x3e8}
+    ema-settings0                  {0x1, 0x1f, 0x0, 0x0}
+    reg                            {0xf100000, 0x7000, 0x8c00000, 0x1000, 0x8d00000, 0x1000, 0x8e00000, 0x1000, 0x8f00000, 0x1000, 0xa500000, 0x1000, 0xa600000, 0x1000}
+    firmware-v-perf-states         {0x3, 0x2}
+    device-clocks                  <4320 bytes> 100000000000000000000000000000000000000043505530...
+/arm-io/wdt
+    interrupt-parent               {0xe000000}
+    compatible                     'wdt,s5l8940x' | 'wdt,s5l8930x' | 'wdt,s5l8920x'
+    AAPL,phandle                   {0x11000000}
+    interrupts                     {0x4}
+    wdt-version                    {0x1}
+    clock-ids                      {0x4}
+    device_type                    'wdt'
+    reg                            {0xf103020, 0x10}
+/arm-io/pl310
+    power-features                 {0x2}
+    compatible                     'pl310,s5l8940x'
+    data-ram-latencies             {0x110}
+    clock-ids                      {0x12c}
+    reg                            {0xe000000, 0x1000, 0xfd00000, 0x2000}
+    AAPL,phandle                   {0x12000000}
+    auxiliary-features             {0x72100000}
+    device_type                    'pl310'
+    idle-timeout                   {0x1388}
+    tag-ram-latencies              {0x110}
+    prefetch-features              {0x30000000}
+/arm-io/trace
+    AAPL,phandle                   {0x13000000}
+    device_type                    'trace'
+    reg                            {0xd203000, 0x1000, 0xd204000, 0x1000, 0xd23c000, 0x1000, 0xd23d000, 0x1000}
+/arm-io/cdma
+    interrupt-parent               {0xe000000}
+    max-channel                    ','
+    AAPL,phandle                   {0x14000000}
+    interrupts                     '3' | '' | '' | '4' | '' | '' | '5' | '' | '' | '6' | '' | '' | '7' | '' | '' | '8' | '' | '' | '9' | '' | '' | ':' | '' | '' | ';' | '' | '' | '<' | '' | '' | '=' | '' | '' | '>' | '' | '' | '?' | '' | '' | '@' | '' | '' | 'A' | '' | '' | 'B' | '' | '' | 'C' | '' | '' | 'D' | '' | '' | 'E' | '' | '' | 'F' | '' | '' | 'G' | '' | '' | 'H' | '' | '' | 'I' | '' | '' | 'J' | '' | '' | 'K' | '' | '' | 'L' | '' | '' | 'M' | '' | '' | 'N' | '' | '' | 'O' | '' | '' | 'P' | '' | '' | 'Q' | '' | '' | 'R' | '' | '' | 'S' | '' | '' | 'T' | '' | '' | 'U' | '' | '' | 'V' | '' | '' | 'W' | '' | '' | 'X' | '' | '' | 'Y' | '' | '' | 'Z' | '' | '' | '[' | '' | '' | '\\' | '' | '' | ']' | '' | '' | '^'
+    cdma-version                   {0x3}
+    device_type                    'cdma'
+    reg                            {0x7000000, 0x2d000, 0x7800000, 0x9000}
+/arm-io/sha2
+    dma-coherent                   {0x1}
+    compatible                     'sha,s5l8940x'
+    clock-ids                      {0x12e}
+    interrupt-parent               {0xe000000}
+    interrupts                     '&'
+    dma-channels                   {0x4, 0x30200020, 0x100004, 0x1}
+    clock-gates                    ':'
+    reg                            {0x200000, 0x1000}
+    slave-dma-only                 <empty>
+    device_type                    'sha2'
+    AAPL,phandle                   {0x15000000}
+    dma-parent                     {0x14000000}
+/arm-io/flash-controller0
+    dma-coherent                   {0x1}
+    compatible                     'fmi,s5l8940x' | 'fmi,s5l8920x'
+    clock-ids                      {0x12f}
+    interrupt-parent               {0xe000000}
+    interrupts                     '!' | '' | '' | '"'
+    clock-gates                    ';' | '' | '' | '=' | '' | '' | '<' | '' | '' | '>'
+    reg                            {0x1200000, 0x1000, 0x1240000, 0x1000, 0x1280000, 0x1000, 0x1300000, 0x1000, 0x1340000, 0x1000, 0x1380000, 0x1000}
+    AAPL,phandle                   {0x16000000}
+    function-device0_reset         {0x10000000, 0x41525354, 0x2f}
+    device_type                    'fmi'
+    function-device1_reset         {0x10000000, 0x41525354, 0x31}
+    power-gates                    ';' | '' | '' | '=' | '' | '' | '<' | '' | '' | '>'
+/arm-io/flash-controller0/disk
+    caus-ce                        {0x0}
+    ecc-threshold                  {0x0}
+    vendor-type                    {0x0}
+    toggle-device                  {0x0}
+    use-4k-aes-chain               {0x1}
+    enable-diff-dqs                {0x0}
+    block-bits                     {0x0}
+    match-oddeven-caus             {0x0}
+    #ce-blocks                     {0x0}
+    ce-hold-clks                   {0x0}
+    max-transaction-size           {0x0}
+    enable-diff-re                 {0x0}
+    ecc-correctable                {0x0}
+    read-hold-clks                 {0x0}
+    #ce                            {0x0}
+    slc-pages                      {0x0}
+    default-ftl-version            {0x1}
+    bfn-enable-pool-format         {0x1}
+    read-post-clks                 {0x0}
+    mlc-pages                      {0x0}
+    ppn-features                   {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    write-pre-clks                 {0x0}
+    write-hold-clks                {0x0}
+    ppn-ftl-ver                    {0x2}
+    retire-on-invalid-refresh      {0x0}
+    #page-bytes                    {0x0}
+    ce-setup-clks                  {0x0}
+    #die-ce                        {0x0}
+    boot-from-nand                 {0x1}
+    whr-clks                       {0x0}
+    bfn-max-major-version          {0x1}
+    AAPL,phandle                   {0x17000000}
+    adl-clks                       {0x0}
+    compatible                     'nand'
+    ppn-device                     {0x0}
+    #block-pages                   {0x0}
+    logical-page-size              {0x0}
+    dbg-chipids                    <256 bytes> 000000000000000000000000000000000000000000000000...
+    ppn-spec-version               {0x0}
+    read-setup-clks                {0x0}
+    read-pre-clks                  {0x0}
+    valid-meta-per-logical-page    {0x0}
+    power-delay                    {0x2faf080}
+    page-bits                      {0x0}
+    read-dccycle-clks              {0x0}
+    reg-dqs-delay                  {0x0}
+    ce-bitmap                      {0x0}
+    bbt-format                     {0x0}
+    diag-bits                      {0x1}
+    write-post-clks                {0x0}
+    write-setup-clks               {0x0}
+    blocks-cau                     {0x0}
+    cau-bits                       {0x0}
+    meta-per-logical-page          {0x0}
+    dqs-half-cycle-clks            {0x0}
+    device_type                    'nand'
+    #spare-bytes                   {0x0}
+    #databus                       {0x0}
+    metadata-whitening             {0x1}
+    device-readid                  {0x0, 0x0}
+    enable-vref                    {0x0}
+/arm-io/spi1
+    dma-coherent                   {0x1}
+    compatible                     'spi-1,samsung'
+    function-spi_cs0               {0xf000000, 0x4750494f, 0x1307, 0x10001}
+    interrupt-parent               {0xe000000}
+    clock-ids                      {0x130, 0x133}
+    dma-channels                   {0x11, 0x32100010, 0x10001, 0x2, 0x12, 0x32100020, 0x10001, 0x3}
+    clock-gates                    'D'
+    interrupts                     {0x1d}
+    reg                            {0x2100000, 0x1000}
+    device_type                    'spi'
+    #size-cells                    {0x7}
+    AAPL,phandle                   {0x18000000}
+    #address-cells                 {0x1}
+    spi-version                    {0x1}
+    dma-parent                     {0x14000000}
+/arm-io/spi1/multi-touch
+    function-clock_enable          {0x24000000, 0x4750494f, 0x0, 0x2000101}
+    compatible                     'multi-touch,n94'
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x15, 0x0}
+    reg                            {0x0, 0x7c, 0x8010000, 0x1388, 0x2710, 0x0, 0x0, 0x0}
+    AAPL,phandle                   {0x19000000}
+    device_type                    'multi-touch'
+    function-power_ldo             {0x24000000, 0x706d754c, 0x213}
+    function-power_xxx             {0x24000000, 0x706d754c, 0x20c}
+    function-reset                 {0xf000000, 0x4750494f, 0x407, 0x10001}
+    multi-touch-calibration        <1024 bytes> 000000000000000000000000000000000000000000000000...
+    prox-calibration               <128 bytes> 000000000000000000000000000000000000000000000000...
+    function-enable_cs             {0xf000000, 0x4750494f, 0x1307, 0x101}
+/arm-io/uart0
+    dma-coherent                   {0x1}
+    compatible                     'uart-1,samsung'
+    clock-ids                      {0x130, 0x4}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x15}
+    clock-gates                    'H'
+    reg                            {0x2500000, 0x1000}
+    AAPL,phandle                   {0x1a000000}
+    device_type                    'uart'
+    no-flow-control                <empty>
+    function-tx                    {0xf000000, 0x4750494f, 0x1b04, 0x102}
+    uart-version                   {0x1}
+    boot-console                   <empty>
+/arm-io/uart0/iap
+    function-dock_parent           {0x5d000000, 0x61636350}
+    AAPL,phandle                   {0x1b000000}
+/arm-io/uart1
+    dma-coherent                   {0x1}
+    compatible                     'uart-1,samsung'
+    clock-ids                      {0x130, 0x4}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x16}
+    dma-channels                   {0xd, 0x32600024, 0x10001, 0xd}
+    clock-gates                    'I'
+    reg                            {0x2600000, 0x1000}
+    AAPL,phandle                   {0x1c000000}
+    device_type                    'uart'
+    function-rts                   {0xf000000, 0x4750494f, 0x505, 0x101}
+    function-tx                    {0xf000000, 0x4750494f, 0x503, 0x2000101}
+    dma-types                      {0x2}
+    line-enable-alt-function       <empty>
+    dma-parent                     {0x14000000}
+    uart-version                   {0x1}
+/arm-io/uart1/debug
+    AAPL,phandle                   {0x1d000000}
+/arm-io/uart3
+    dma-coherent                   {0x1}
+    compatible                     'uart-1,samsung'
+    clock-ids                      {0x130, 0x4}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x18}
+    dma-channels                   {0x10, 0x32800024, 0x10001, 0x11, 0xf, 0x32800020, 0x10001, 0x10}
+    clock-gates                    'K'
+    reg                            {0x2800000, 0x1000}
+    AAPL,phandle                   {0x1e000000}
+    device_type                    'uart'
+    function-rts                   {0xf000000, 0x4750494f, 0x605, 0x2}
+    function-tx                    {0xf000000, 0x4750494f, 0x603, 0x102}
+    dma-types                      {0x2, 0x4}
+    dma-parent                     {0x14000000}
+    uart-version                   {0x1}
+/arm-io/uart3/bluetooth
+    function-bt_wake               {0xf000000, 0x4750494f, 0x7, 0x101}
+    compatible                     'bluetooth,n88'
+    transport-speed                {0x2dc6c0}
+    AAPL,phandle                   {0x1f000000}
+    product-id                     {0x12a0}
+    local-mac-address              <6 bytes> 000000000000
+    coex                           {0x2}
+    function-bt_reset              {0xf000000, 0x4750494f, 0x100, 0x1}
+    device_type                    'bluetooth'
+    supported-profiles             {0x2ffb}
+    vendor-id                      {0x5ac}
+    transport-encoding             {0x3}
+    voice-record                   <empty>
+/arm-io/uart5
+    dma-coherent                   {0x1}
+    compatible                     'uart-1,samsung'
+    clock-ids                      {0x130, 0x4}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x1a}
+    reg                            {0x2a00000, 0x1000}
+    clock-gates                    'M'
+    AAPL,phandle                   {0x20000000}
+    device_type                    'uart'
+    no-flow-control                <empty>
+    function-tx                    {0xf000000, 0x4750494f, 0x607, 0x102}
+    uart-version                   {0x1}
+/arm-io/uart5/gas-gauge
+    AAPL,phandle                   {0x21000000}
+    compatible                     'gas-gauge,bq27540' | 'gas-gauge,hdq'
+    function-battery_swi           {0x24000000, 0x4750494f, 0x5, 0x100}
+    device_type                    'gas-gauge'
+    battery-id-block               {0x2}
+/arm-io/pke
+    interrupt-parent               {0xe000000}
+    compatible                     'pke-1,samsung'
+    AAPL,phandle                   {0x22000000}
+    interrupts                     {0x11}
+    clock-gates                    'O'
+    clock-ids                      {0x131}
+    device_type                    'pke'
+    reg                            {0x3100000, 0x1000}
+/arm-io/i2c0
+    compatible                     'i2c,s5l8940x' | 'iic,soft'
+    clock-ids                      {0x11e}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x12}
+    clock-gates                    'P'
+    #address-cels                  {0x1}
+    reg                            {0x3200000, 0x1000}
+    AAPL,phandle                   {0x23000000}
+    device_type                    'i2c'
+    #size-cells                    {0x3}
+    function-device_reset          {0x10000000, 0x41525354, 0x46}
+    function-iic_sda               {0xf000000, 0x4750494f, 0x1502, 0x10102}
+    function-iic_scl               {0xf000000, 0x4750494f, 0x1503, 0x10102}
+/arm-io/i2c0/pmu
+    reg                            {0x74, 0x9c4, 0x0, 0x0}
+    gpio-pin-config                {0x0, 0x0, 0x0, 0x0, 0x0, 0x1fdd8ff, 0x0, 0x0, 0x0, 0x0, 0x0}
+    #address-cells                 {0x0}
+    function-keepact               {0xf000000, 0x4750494f, 0x203, 0x101}
+    location-tdev2                 'Rear Camera Proximity'
+    AAPL,phandle                   {0x24000000}
+    location-id-tdev4              'S3PT'
+    event_name-gpio11              'accel'
+    location-id-tdev3              'RRPT'
+    event_name-gpio8               'codec'
+    event_name-gpio10              'bluetooth'
+    event_name-gpio6               'battery'
+    location-id-tdev2              'CbPT'
+    location-tdev4                 'H4P Proximity'
+    location-id-tdev1              'A1PT'
+    interrupt-parent               {0xf000000}
+    event_name-gpio2               'baseband'
+    location-tdev1                 'Ambient/MLB corner'
+    interrupt-controller           <empty>
+    compatible                     'pmu,d1881'
+    interrupts                     {0xd, 0x1}
+    #interrupt-cells               {0x1}
+    location-tdev3                 'RF Power Amp'
+    event_name-gpio7               'wlan'
+    device_type                    'interrupt-controller'
+    dwi-buck-control               {0x5}
+    halon-threshold                {0xfa0}
+    function-panic_reset           {0x11000000, 0x57445472, 0x0}
+/arm-io/i2c0/audio0
+    at-scale                       {0x0, 0x0, 0x0, 0x0}
+    compatible                     'audio-control,cs42l63'
+    unused-hpout_ref_control       {0xf000000, 0x4750494f, 0x1b02, 0x10101}
+    function-spkr_mute             {0xf000000, 0x4750494f, 0x5, 0x10001}
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x1e, 0x1}
+    mic3-intmic                    <empty>
+    headphone-pop-workaround       {0x0}
+    reg                            {0x4a, 0x9c4, 0x0, 0x0}
+    device_type                    'audio-control'
+    vsp-voice                      <empty>
+    xsp-reference                  <empty>
+    spkr-gain-db                   {0x80000000, 0xfffffffe}
+    AAPL,phandle                   {0x25000000}
+    earout-rcvr                    <empty>
+    mic2-extmic                    <empty>
+    function-headset_switch        {0x28000000, 0x48537377}
+    speakerouta-spkr               <empty>
+/arm-io/i2c0/audio0/codec-pwm
+    device_type                    'pwm'
+    AAPL,phandle                   {0x26000000}
+/arm-io/i2c0/audio0/codec-pwm/vibrator
+    reg                            {0xf501}
+    AAPL,phandle                   {0x27000000}
+    enable-ms                      'd'
+    intensity-config               'lpma'
+    default-hz                     {0xaf}
+    device_type                    'pwm'
+/arm-io/i2c0/headset-switch
+    AAPL,phandle                   {0x28000000}
+    compatible                     'headset-switch,ts3a8235'
+    function-ext_switch            {0xf000000, 0x4750494f, 0x1b02, 0x10101}
+    slow-ramp-delay                '2'
+    switch-config                  ':'
+    device_type                    'headset-switch'
+    reg                            {0x3b, 0x9c4, 0x0, 0x0}
+/arm-io/i2c1
+    compatible                     'i2c,s5l8940x' | 'iic,soft'
+    clock-ids                      {0x11e}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x13}
+    clock-gates                    'Q'
+    #address-cels                  {0x1}
+    reg                            {0x3300000, 0x1000}
+    AAPL,phandle                   {0x29000000}
+    device_type                    'i2c'
+    #size-cells                    {0x3}
+    function-device_reset          {0x10000000, 0x41525354, 0x47}
+    function-iic_sda               {0xf000000, 0x4750494f, 0x1504, 0x10102}
+    function-iic_scl               {0xf000000, 0x4750494f, 0x1505, 0x10102}
+/arm-io/i2c1/compass
+    interrupt-parent               {0xf000000}
+    compatible                     'compass,akm8975b'
+    orientation                    {0xff, 0x100, 0xff0000}
+    interrupts                     {0x22, 0x1}
+    reg                            {0xd, 0x9c4, 0x0, 0x0}
+    AAPL,phandle                   {0x2a000000}
+    device_type                    'compass'
+    compass-calibration            <76 bytes> 000000000000000000000000000000000000000000000000...
+/arm-io/i2c1/als
+    intercepts                     {0xfffffe6b, 0x627d, 0x28f6, 0x3867, 0x19d3}
+    backlight-leakage-channel1     {0x0}
+    compatible                     'als,tsl2581'
+    integrationCycles              {0x94}
+    gainForLuxCurves               {0x80}
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x26, 0x1}
+    backlight-leakage-channel0     {0x0}
+    alsCalibration                 {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    als-colorCfg                   {0x0, 0x0, 0x0, 0x0}
+    device_type                    'als'
+    numCurves                      {0x5}
+    ratioLimits                    {0x2c, 0x33, 0x8d, 0xc8, 0x29a}
+    reg                            {0x49, 0x9c4, 0x0, 0x0}
+    slopes                         {0xffff2a56, 0x31461, 0x699a, 0x7d2f, 0x3972}
+    useAABPlugin                   {0x1}
+    AAPL,phandle                   {0x2b000000}
+/arm-io/i2c2
+    compatible                     'i2c,s5l8940x' | 'iic,soft'
+    clock-ids                      {0x11e}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x14}
+    clock-gates                    'R'
+    #address-cels                  {0x1}
+    reg                            {0x3400000, 0x1000}
+    AAPL,phandle                   {0x2c000000}
+    device_type                    'i2c'
+    #size-cells                    {0x3}
+    function-device_reset          {0x10000000, 0x41525354, 0x48}
+    function-iic_sda               {0xf000000, 0x4750494f, 0x1400, 0x10102}
+    function-iic_scl               {0xf000000, 0x4750494f, 0x1401, 0x10102}
+/arm-io/i2c2/accelerometer
+    interrupt-parent               {0xf000000}
+    compatible                     'accelerometer,lis331dlh'
+    orientation                    {0xff, 0xff00, 0xff0000}
+    interrupts                     {0x24, 0x1, 0x25, 0x1}
+    reg                            {0x19, 0x9c4, 0x0, 0x0}
+    AAPL,phandle                   {0x2d000000}
+    low-temp-accel-offset          {0x0, 0x0, 0x0, 0x0, 0x0}
+    accel-sensitivity-calibration  {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    device_type                    'accelerometer'
+/arm-io/i2c2/gyro
+    use-2-interrupts               {0x1}
+    orientation                    {0xff, 0xff00, 0x10000}
+    compatible                     'gyro,ap3gdl'
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x21, 0x3, 0x20, 0x3}
+    orientation-inverse            {0xff, 0xff00, 0x10000}
+    reg                            {0x6a, 0x9c4, 0x0, 0x0}
+    gyro-sens-matrix-inverse       {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    high-temp-offset               {0x0, 0x0, 0x0, 0x0, 0x0}
+    device_type                    'gyro'
+    AAPL,phandle                   {0x2e000000}
+    gyro-sensitivity-calibration   {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    low-temp-offset                {0x0, 0x0, 0x0, 0x0, 0x0}
+    gyro-interrupt-calibration     {0x0, 0x0}
+    gyro-temp-table                <320 bytes> 000000000000000000000000000000000000000000000000...
+/arm-io/i2c2/gyro1
+    use-2-interrupts               {0x1}
+    orientation                    {0xff, 0xff00, 0x10000}
+    compatible                     'gyro,ap3gdl'
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x21, 0x3, 0x20, 0x3}
+    orientation-inverse            {0xff, 0xff00, 0x10000}
+    reg                            {0x68, 0x9c4, 0x0, 0x0}
+    gyro-sens-matrix-inverse       {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    high-temp-offset               {0x0, 0x0, 0x0, 0x0, 0x0}
+    device_type                    'gyro'
+    AAPL,phandle                   {0x2f000000}
+    gyro-sensitivity-calibration   {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    low-temp-offset                {0x0, 0x0, 0x0, 0x0, 0x0}
+    gyro-interrupt-calibration     {0x0, 0x0}
+    gyro-temp-table                <320 bytes> 000000000000000000000000000000000000000000000000...
+/arm-io/otgphyctrl
+    uotgtune1-device               {0x349}
+    uotgtune2-host                 {0xed3}
+    compatible                     'otgphyctrl,s5l8940x' | 'otgphyctrl,s5l8930x'
+    clock-ids                      {0x5}
+    AAPL,phandle                   {0x30000000}
+    reg                            {0x6000000, 0x1000}
+    uotgtune1-host                 {0x34f}
+    device_type                    'otgphyctrl'
+    uotgtune2-device               {0xf13}
+    usbhostset-en-incrx            {0xe0}
+    function-dmon_voltage          {0x24000000, 0x61646356, 0x6, 0x10000}
+    ref-clock-sel                  {0x3}
+    phy-tuning-val                 {0x0}
+    clock-mask                     {0x20010}
+/arm-io/usb-complex
+    compatible                     'usb-complex,s5l8940x' | 'usb-complex,s5l8930x'
+    clock-ids                      {0x124}
+    AAPL,phandle                   {0x31000000}
+    reg                            {0xf108000, 0x1000}
+    function-usb20_reset           {0x10000000, 0x41525354, 0x22}
+    usb_ctl                        'd'
+    clock-gates                    'X' | '' | '' | 'Y' | '' | '' | 'Z' | '' | '' | '[' | '' | '' | 'W'
+    device_type                    'usb-complex'
+    ranges                         {0x0, 0x6100000, 0x600000}
+    #size-cells                    {0x1}
+    #address-cells                 {0x1}
+/arm-io/usb-complex/usb-device
+    publish-criteria               {0x3}
+    AAPL,phandle                   {0x32000000}
+    configuration-string           'standardMuxPTPEthernet'
+    function-dock_parent           {0x5d000000, 0x61636350}
+    product-string                 'iPhone'
+    device-mac-address             <6 bytes> 000000000000
+    num-of-eps                     {0xe}
+    interrupt-parent               {0xe000000}
+    vendor-id                      {0x5ac}
+    vendor-string                  'Apple Inc.'
+    compatible                     'usb-device,s5l8940x' | 'usb-device,s5l8900x'
+    interrupts                     {0xb}
+    product-id                     {0x12a0}
+    host-mac-address               <6 bytes> 000000000000
+    product-version                {0x410}
+    clock-mask                     {0x30011}
+    function-usb_500_100           {0x5e000000, 0x43485247, 0x0}
+    device_type                    'usb-device'
+    eps-dir-bitmap                 {0x264}
+    reg                            {0x0, 0x10000}
+    fifo-depth                     {0x820}
+/arm-io/usb-complex/usb-ehci
+    disable-park-mode              <empty>
+    companion-id                   {0x0}
+    compatible                     'usb-ehci,s5l8940x' | 'usb-synopsys_ehci,s5l8930x'
+    interrupt-parent               {0xe000000}
+    interrupts                     {0xc}
+    publish-criteria               {0xc}
+    reg                            {0x300000, 0x10000, 0x600000, 0x10000}
+    AAPL,phandle                   {0x33000000}
+    device_type                    'usb-ehci'
+    location                       {0x1}
+    bus-number                     {0x1}
+    clock-mask                     {0x30012}
+/arm-io/usb-complex/usb-ehci/hsic-baseband
+    clock-mask                     {0x30012}
+    port-current-limit             {0xfa}
+    interface-count                {0x4}
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x11, 0x4}
+    AAPL,phandle                   {0x34000000}
+    device_type                    'hsic-baseband'
+    identifier                     {0x20001}
+    function-device_ready          {0xf000000, 0x4750494f, 0x201, 0x100}
+    function-host_ready            {0xf000000, 0x4750494f, 0x700, 0x101}
+    port-type                      {0x3}
+    port                           {0x2}
+/arm-io/usb-complex/usb-ehci/wlan
+    bcom.ps.realtime               {0xc80003, 0x10000, 0xfa0}
+    tx-calibration-2.4             <6 bytes> 000000000000
+    AAPL,phandle                   {0x35000000}
+    port-current-limit             {0xfa}
+    local-mac-address              <6 bytes> 000000000000
+    bcom.ps.default                {0x3c0003, 0x10000, 0xfa0}
+    bcom.roam.default              {0x3c0001, 0x7000a, 0x3, 0x14ffb5, 0xaffb5}
+    idle-disconnect                {0x0}
+    function-device_reset          {0x24000000, 0x4750494f, 0xa, 0x10001}
+    interrupt-parent               {0xf000000}
+    port-type                      {0x3}
+    interrupts                     {0x1f, 0x4}
+    port                           {0x3}
+    identifier                     {0x30001}
+    function-device_ready          {0xf000000, 0x4750494f, 0x307, 0x100}
+    clock-mask                     {0x30012}
+    bcom.btc.params                {0x6, 0x41, 0x8, 0xafc8, 0x9, 0x3a98, 0xa, 0x4e20}
+    port-timing                    {0xa, 0xa, 0x3, 0x64, 0x32, 0xa, 0x2}
+    wlan.tethering.enabled         {0x1}
+    function-host_ready            {0xf000000, 0x4750494f, 0x507, 0x101}
+    host-connect-on-reset          {0x1}
+    device_type                    'wlan'
+    bcom.roam.enterprise           {0x3c0001, 0x7000a, 0x3, 0xcffba, 0xcffba}
+/arm-io/usb-complex/usb-ehci/usb-ehci-port1
+    port                           {0x1}
+    AAPL,phandle                   {0x36000000}
+    clock-mask                     {0x30002}
+    port-current-limit             '2'
+    device_type                    'usb-ehci-port1'
+    port-type                      {0x2}
+/arm-io/usb-complex/usb-ohci0
+    companion-id                   {0x0}
+    compatible                     'usb-ohci,s5l8940x' | 'usb-ohci,s5l8930x'
+    interrupt-parent               {0xe000000}
+    interrupts                     {0xd}
+    port-count                     {0x1}
+    publish-criteria               {0x4}
+    reg                            {0x400000, 0x10000}
+    AAPL,phandle                   {0x37000000}
+    device_type                    'usb-ohci'
+    location                       {0x2}
+    bus-number                     {0x2}
+    clock-mask                     {0x30016}
+/arm-io/usb-complex/usb-ohci0/usb-ohci0-port1
+    port                           {0x1}
+    AAPL,phandle                   {0x38000000}
+    clock-mask                     {0x30006}
+    port-current-limit             '2'
+    device_type                    'usb-ohci0-port1'
+    port-type                      {0x2}
+/arm-io/usb-complex/usb-ohci1
+    compatible                     'usb-ohci,s5l8940x' | 'usb-ohci,s5l8930x'
+    interrupt-parent               {0xe000000}
+    interrupts                     {0xe}
+    publish-criteria               {0x10}
+    reg                            {0x500000, 0x10000}
+    AAPL,phandle                   {0x39000000}
+    device_type                    'usb-ohci'
+    location                       {0x3}
+    removable                      {0x0}
+    bus-number                     {0x3}
+    clock-mask                     {0x10008}
+/arm-io/iop
+    compatible                     'iop,s5l8940x'
+    clock-ids                      {0x12b}
+    interrupt-parent               {0xe000000}
+    idle-sleep                     {0x1}
+    interrupts                     {0x2}
+    clock-gates                    'V'
+    function-nmi                   {0xe000000, 0x49504944, 0x10002}
+    reg                            {0xf300000, 0x1000}
+    iop-version                    {0x1}
+    device_type                    'iop'
+    function-doorbell              {0xe000000, 0x49504944, 0x3}
+    AAPL,phandle                   {0x3a000000}
+    function-device_reset          {0x10000000, 0x41525354, 0x16}
+    power-gates                    'V'
+/arm-io/dwi
+    dwi-version                    {0x1}
+    lockout-us                     {0x5}
+    compatible                     'dwi,s5l8940x'
+    clock-ids                      {0x4}
+    interrupt-parent               {0xe000000}
+    interrupts                     {0x6}
+    clock-gates                    '~'
+    reg                            {0xf700000, 0x1000}
+    AAPL,phandle                   {0x3b000000}
+    str-delay                      {0x1f40}
+    polarity-config                {0x1}
+    device_type                    'dwi'
+    voltages-buck2                 {0x0, 0x0}
+    nclk-div                       {0x1}
+    voltages-buck0                 {0x0, 0x0, 0x0}
+/arm-io/clcd
+    function-lcd_enable            {0x3e000000, 0x6c636445}
+    compatible                     'clcd,s5l8940x'
+    dma-coherent                   {0x0, 0x1}
+    clock-ids                      {0x126, 0x11c}
+    interrupt-parent               {0xe000000}
+    dma-channels                   {0x2b, 0x3a20103c, 0x80004, 0x1}
+    function-vblank_clock_reset    {0x3d000000, 0x6d697052}
+    clock-gates                    {0x67, 0x7f}
+    display-default-color          {0x0}
+    device_type                    'clcd'
+    interrupts                     '+' | '' | '' | '*'
+    minimum-frequency              {0x61d8d40, 0x0}
+    reg                            {0xa100000, 0x7000, 0x9200000, 0x2000, 0x9300000, 0x1000}
+    AAPL,phandle                   {0x3c000000}
+    dma-parent                     {0x14000000}
+    dot-pitch                      {0x0}
+    power-gates                    'g'
+/arm-io/mipi-dsim
+    compatible                     'mipi-dsim-1,samsung'
+    clock-ids                      {0x120}
+    interrupt-parent               {0xe000000}
+    interrupts                     ')'
+    function-saca                  {0x61000000, 0x53414341, 0x6c636430}
+    clock-gates                    'h'
+    reg                            {0x9500000, 0x1000, 0xf110000, 0x1000}
+    sac-version                    {0x1}
+    device_type                    'mipi-dsim'
+    #size-cells                    {0x0}
+    AAPL,phandle                   {0x3d000000}
+    #address-cells                 {0x0}
+    sac-range                      {0x1e19b040, 0x0, 0x1e93c240, 0x0}
+    power-gates                    'h'
+    #lanes                         {0x4}
+/arm-io/mipi-dsim/lcd
+    compatible                     'lcd,pinot'
+    function-lcd_ldo               {0x24000000, 0x706d754c, 0x30d}
+    function-reset                 {0xf000000, 0x4750494f, 0x206, 0x1}
+    raw-panel-id                   {0x0, 0x0, 0x0, 0x0}
+    lcd-panel-id                   {0x0}
+    device_type                    'lcd'
+    AAPL,phandle                   {0x3e000000}
+/arm-io/rgbout
+    dma-coherent                   {0x0, 0x1}
+    compatible                     'rgbout,s5l8940x'
+    clock-ids                      {0x126}
+    interrupt-parent               {0xe000000}
+    interrupts                     ',' | '' | '' | '-'
+    dma-channels                   {0x2a, 0x3a10103c, 0x80004, 0x0}
+    clock-gates                    'i' | '' | '' | 'j'
+    minimum-frequency              {0x61d8d40, 0x0}
+    reg                            {0xa200000, 0x7000, 0x9600000, 0x1000}
+    device_type                    'rgbout'
+    AAPL,phandle                   {0x3f000000}
+    dma-parent                     {0x14000000}
+    power-gates                    'i'
+/arm-io/tv-out
+    compatible                     'tv-out,s5l8940x' | 'tv-out,s5l8930x'
+    clock-ids                      {0x126, 0x11d}
+    interrupt-parent               {0xe000000}
+    dac-cals                       {0x7c2, 0x7c2, 0x7c2}
+    interrupts                     '('
+    clock-gates                    'l'
+    reg                            {0x9400000, 0x1000}
+    function-amp_enable            {0xf000000, 0x4750494f, 0x1b01, 0x101}
+    device_type                    'tv-out'
+    AAPL,phandle                   {0x40000000}
+    mux0-dacs                      {0x2, 0x0, 0x1}
+    mux1-dacs                      {0x0, 0x1, 0x2}
+    power-gates                    'l'
+/arm-io/displayport
+    function-nco_frequency         {0x10000000, 0x4e434f66, 0x5}
+    dma-coherent                   {0x1}
+    compatible                     'displayport,s5l8940x'
+    calibration_data               <896 bytes> 000000000000000000000000000000000000000000000000...
+    interrupt-parent               {0xe000000}
+    interrupts                     '.' | '' | '' | '/'
+    dma-channels                   {0x27, 0x34195838, 0x40004, 0x9}
+    calibration_version            {0x1}
+    clock-gates                    'k'
+    max_lane_count                 {0x2}
+    device_type                    'displayport'
+    reg                            {0x9700000, 0x2000, 0x4195000, 0x1000}
+    AAPL,phandle                   {0x41000000}
+    function-device_reset          {0x10000000, 0x41525354, 0xe}
+    dma-parent                     {0x14000000}
+    power-gates                    'k'
+    max_link_rate                  {0xa}
+/arm-io/ae2
+    sram-available                 {0x0, 0x30000}
+    compatible                     'ae2,s5l8940x'
+    clock-ids                      {0x121}
+    interrupt-parent               {0xe000000}
+    idle-sleep                     {0x1}
+    interrupts                     'a' | '' | '' | 'b'
+    clock-gates                    'r'
+    reg                            {0x41e0000, 0x1000, 0x41e1000, 0x1000, 0x41a0000, 0x1000, 0x41c1000, 0x1000, 0x4000000, 0x30000}
+    AAPL,phandle                   {0x42000000}
+    device_type                    'ae2'
+    ae2-version                    {0x1}
+/arm-io/highland-park
+    at-scale                       {0x0, 0x0, 0x0, 0x0}
+    dma-coherent                   {0x1}
+    compatible                     'highland-park,s5l8940x'
+    clock-ids                      {0x122, 0x123}
+    interrupt-parent               {0xe000000}
+    interrupts                     'p' | '' | '' | 'q' | '' | '' | 'r' | '' | '' | 's'
+    dma-channels                   {0x2c, 0x3b000804, 0x80001, 0x0, 0x2c, 0x3b00080c, 0x80001, 0x0, 0x2c, 0x3b000814, 0x80001, 0x0, 0x2c, 0x3b00081c, 0x80001, 0x0}
+    clock-gates                    'x'
+    reg                            {0xb020000, 0x20000, 0xb010000, 0x10000, 0xb000800, 0x800, 0xb000000, 0x800}
+    AAPL,phandle                   {0x43000000}
+    device_type                    'highland-park'
+    dma-parent                     {0x14000000}
+    power-gates                    'x'
+/arm-io/i2s-switch
+    AAPL,phandle                   {0x44000000}
+    compatible                     'i2s-switch,s5l8940x'
+    default-routes                 {0x68636c6b, 0x68703020, 0x101}
+    device_type                    'i2s-switch'
+    reg                            {0xfa01000, 0x1000}
+/arm-io/i2s0
+    dma-coherent                   {0x1}
+    compatible                     'i2s-1,samsung'
+    function-mclk_frequency        {0x10000000, 0x4e434f66, 0x0}
+    interrupt-parent               {0xe000000}
+    function-i2s_route             {0x44000000, 0x69327352, 0x61703020, 0x70696e30, 0x300303}
+    dma-channels                   {0x1f, 0x34190010, 0x40002, 0x1, 0x20, 0x34190038, 0x40002, 0x0, 0x1f, 0x34190010, 0x40004, 0x1, 0x20, 0x34190038, 0x40004, 0x0}
+    clock-gates                    's'
+    interrupts                     'c'
+    reg                            {0x4190000, 0x1000}
+    device_type                    'i2s'
+    #size-cells                    {0x8}
+    i2s-version                    {0x3}
+    AAPL,phandle                   {0x45000000}
+    function-pclk_gate             {0x42000000, 0x61647657, 0x0}
+    #address-cells                 {0x0}
+    dma-parent                     {0x14000000}
+/arm-io/i2s0/audio0
+    reg                            {0x180, 0x0, 0x3000081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+    compatible                     'audio-data,cs42l63'
+    AAPL,phandle                   {0x46000000}
+    function-clock_src_system      {0x44000000, 0x69327352, 0x61703020, 0x70696e30, 0x30000}
+    device_type                    'audio-data'
+    function-clock_src_baseband    {0x44000000, 0x69327352, 0x61703020, 0x70696e31, 0x10000}
+/arm-io/i2s1
+    dma-coherent                   {0x1}
+    compatible                     'i2s-1,samsung'
+    function-mclk_frequency        {0x10000000, 0x4e434f66, 0x1}
+    interrupt-parent               {0xe000000}
+    function-i2s_route             {0x44000000, 0x69327352, 0x61703120, 0x0, 0x3}
+    dma-channels                   {0x21, 0x34191010, 0x40002, 0x3, 0x22, 0x34191038, 0x40002, 0x2, 0x21, 0x34191010, 0x40004, 0x3, 0x22, 0x34191038, 0x40004, 0x2}
+    clock-gates                    't'
+    interrupts                     'd'
+    reg                            {0x4191000, 0x1000}
+    device_type                    'i2s'
+    #size-cells                    {0x8}
+    i2s-version                    {0x3}
+    AAPL,phandle                   {0x47000000}
+    function-pclk_gate             {0x42000000, 0x61647657, 0x1}
+    #address-cells                 {0x0}
+    dma-parent                     {0x14000000}
+/arm-io/i2s1/highland-park
+    compatible                     'audio-data,highland-park'
+    function-pcm0_route            {0x44000000, 0x69327352, 0x68703020, 0x0, 0x3}
+    function-pcm1_route            {0x44000000, 0x69327352, 0x68703120, 0x0, 0x3}
+    function-pcm2_route_ref_ext    {0x44000000, 0x69327352, 0x68703220, 0x70696e33, 0x10303}
+    reg                            {0x0, 0x0, 0x3000081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+    AAPL,phandle                   {0x48000000}
+    device_type                    'audio-data'
+    function-pcm2_route_mix        {0x44000000, 0x69327352, 0x68703220, 0x61703120, 0x10303}
+    function-pcm2_route_ref_int    {0x44000000, 0x69327352, 0x68703220, 0x61703320, 0x10101}
+/arm-io/i2s1/audio-baseband-voice
+    reg                            {0x0, 0x0, 0x3100081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+    compatible                     'audio-data,baseband-voice'
+    data-destinations              '2psdDSP' | 'd2paAP' | '' | '' | '' | '' | 'Disabled'
+    AAPL,phandle                   {0x49000000}
+    data-sources                   <69 bytes> 62327061010100000000020000000000401f000000000000...
+    function-data_dest_route_dsp2  {0x44000000, 0x69327352, 0x70696e31, 0x68703020, 0x30300}
+    function-data_source_route_ap2d {0x44000000, 0x69327352, 0x61703120, 0x68703120, 0x30300}
+    function-data_dest_route_ap2d  {0x44000000, 0x69327352, 0x70696e31, 0x61703120, 0x30300}
+    device_type                    'audio-data'
+    clock-sources                  {0x62623277, 0x0, 0x65736142, 0x646e6162, 0x32734d00, 0x169, 0x73795300, 0x6d6574}
+/arm-io/i2s2
+    dma-coherent                   {0x1}
+    compatible                     'i2s-1,samsung'
+    function-mclk_frequency        {0x10000000, 0x4e434f66, 0x2}
+    interrupt-parent               {0xe000000}
+    function-i2s_route             {0x44000000, 0x69327352, 0x61703220, 0x0, 0x3}
+    dma-channels                   {0x23, 0x34192010, 0x40002, 0x5, 0x24, 0x34192038, 0x40002, 0x4, 0x23, 0x34192010, 0x40004, 0x5, 0x24, 0x34192038, 0x40004, 0x4}
+    clock-gates                    'u'
+    interrupts                     'e'
+    reg                            {0x4192000, 0x1000}
+    device_type                    'i2s'
+    #size-cells                    {0x8}
+    i2s-version                    {0x3}
+    AAPL,phandle                   {0x4a000000}
+    function-pclk_gate             {0x42000000, 0x61647657, 0x2}
+    #address-cells                 {0x0}
+    dma-parent                     {0x14000000}
+/arm-io/i2s2/audio2
+    compatible                     'audio-data,voice'
+    AAPL,phandle                   {0x4b000000}
+    function-clock_src_route_dsp2  {0x44000000, 0x69327352, 0x70696e32, 0x68703120, 0x50000}
+    function-data_dest_route_dsp2  {0x44000000, 0x69327352, 0x70696e32, 0x68703120, 0x300}
+    function-data_source_route_ap2d {0x44000000, 0x69327352, 0x61703220, 0x68703020, 0x20300}
+    clock-sources                  {0x64737032, 0x1, 0x505344, 0x6932734d, 0x1, 0x74737953, 0x77006d65, 0x626232, 0x42000000, 0x62657361, 0x646e61}
+    reg                            {0x0, 0x0, 0x3000081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+    data-destinations              '2psdDSP' | 'd2paAP' | '' | '' | '' | '' | 'Disabled'
+    data-sources                   <152 bytes> 76327061020208000900090000000000401f000000000000...
+    device_type                    'audio-data'
+    function-data_source_route_bths {0x44000000, 0x69327352, 0x61703220, 0x70696e32, 0x300}
+    function-data_dest_route_ap2d  {0x44000000, 0x69327352, 0x70696e32, 0x61703220, 0x300}
+    function-clock_src_route_i2sM  {0x44000000, 0x69327352, 0x70696e32, 0x61703220, 0x50000}
+    function-clock_src_route_bb2w  {0x44000000, 0x69327352, 0x70696e32, 0x70696e31, 0x10000}
+    function-data_source_route_ap2v {0x44000000, 0x69327352, 0x61703220, 0x70696e32, 0x300}
+/arm-io/i2s3
+    dma-coherent                   {0x1}
+    compatible                     'i2s-1,samsung'
+    function-mclk_frequency        {0x10000000, 0x4e434f66, 0x3}
+    interrupt-parent               {0xe000000}
+    function-i2s_route             {0x44000000, 0x69327352, 0x61703320, 0x70696e33, 0x30303}
+    dma-channels                   {0x25, 0x34193010, 0x40002, 0x7, 0x26, 0x34193038, 0x40002, 0x6, 0x25, 0x34193010, 0x40004, 0x7, 0x26, 0x34193038, 0x40004, 0x6}
+    clock-gates                    'v'
+    interrupts                     'f'
+    reg                            {0x4193000, 0x1000}
+    device_type                    'i2s'
+    #size-cells                    {0x8}
+    i2s-version                    {0x3}
+    AAPL,phandle                   {0x4c000000}
+    function-pclk_gate             {0x42000000, 0x61647657, 0x3}
+    #address-cells                 {0x0}
+    dma-parent                     {0x14000000}
+/arm-io/i2s3/audio3
+    AAPL,phandle                   {0x4d000000}
+    compatible                     'audio-data,vibrator' | 'audio-data,reference'
+    device_type                    'audio-data'
+    reg                            {0x0, 0x0, 0x3100081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+/arm-io/i2s3/audio-baseband
+    AAPL,phandle                   {0x4e000000}
+    compatible                     'audio-data,baseband'
+    device_type                    'audio-data'
+    reg                            {0x0, 0x0, 0x3000081, 0x4, 0x1000, 0x4, 0x0, 0x0}
+/arm-io/dart-nrt
+    interrupt-parent               {0xe000000}
+    compatible                     'dart,s5l8940x' | 'dart,s5l8930x'
+    AAPL,phandle                   {0x4f000000}
+    interrupts                     't'
+    dart-version                   {0x1}
+    clock-gates                    ']'
+    invalid-translation-target     {0x30000000}
+    clock-ids                      {0x129}
+    device_type                    'dart'
+    reg                            {0x8b00000, 0x2000}
+/arm-io/dart-nrt/mapper-jpeg
+    tail-padding                   {0x2}
+    compatible                     'iommu-mapper'
+    AAPL,phandle                   {0x50000000}
+    device_type                    'dart-mapper'
+    reg                            {0x0, 0x1}
+/arm-io/dart-nrt/mapper-scaler
+    tail-padding                   {0x1}
+    compatible                     'iommu-mapper'
+    AAPL,phandle                   {0x51000000}
+    iomd-cache-ttl                 {0x7d0}
+    iomd-cache-size                '@'
+    device_type                    'dart-mapper'
+    reg                            {0x2, 0x3}
+/arm-io/scaler
+    interrupt-parent               {0xe000000}
+    compatible                     'scaler,s5l8940x' | 'scaler,s5l8720x'
+    AAPL,phandle                   {0x52000000}
+    interrupts                     {0x9}
+    iommu-parent                   {0x51000000}
+    clock-gates                    'a' | '' | '' | 'b'
+    power-gates                    'a'
+    clock-ids                      {0x129}
+    device_type                    'scaler0'
+    reg                            {0x8300000, 0x1000}
+/arm-io/scaler
+    interrupt-parent               {0xe000000}
+    compatible                     'scaler,s5l8940x' | 'scaler,s5l8720x'
+    AAPL,phandle                   {0x53000000}
+    interrupts                     {0xa}
+    iommu-parent                   {0x51000000}
+    clock-gates                    'c' | '' | '' | 'd'
+    power-gates                    'c'
+    clock-ids                      {0x129}
+    device_type                    'scaler1'
+    reg                            {0x8400000, 0x1000}
+/arm-io/jpeg
+    interrupt-parent               {0xe000000}
+    compatible                     'jpeg,s5l8940x' | 'jpeg,s5l8920x'
+    AAPL,phandle                   {0x54000000}
+    interrupts                     'v'
+    iommu-parent                   {0x50000000}
+    clock-gates                    'e' | '' | '' | 'f'
+    power-gates                    'e'
+    clock-ids                      {0x129}
+    device_type                    'jpeg'
+    reg                            {0x8200000, 0x1000}
+/arm-io/vxe
+    interrupt-parent               {0xe000000}
+    compatible                     'vxe,s5l8940x'
+    AAPL,phandle                   {0x55000000}
+    interrupts                     '0'
+    power-gates                    '`'
+    clock-gates                    '`'
+    clock-ids                      {0x13f, 0x13e}
+    device_type                    'vxe'
+    reg                            {0x8000000, 0x100000}
+/arm-io/vxd
+    compatible                     'vxd,s5l8940x' | 'vxd,s5l8920x'
+    clock-ids                      {0x129}
+    interrupt-parent               {0xe000000}
+    interrupts                     '2'
+    clock-gates                    '^' | '' | '' | '_'
+    vxd-version                    {0x2}
+    reg                            {0x8100000, 0x100000}
+    AAPL,phandle                   {0x56000000}
+    device_type                    'vxd'
+    power-gates                    '^'
+    allow-oold                     {0x0}
+/arm-io/sgx
+    compatible                     'sgx,s5l8940x'
+    brn_31195                      {0x1}
+    interrupt-parent               {0xe000000}
+    interrupts                     '1'
+    reg                            {0x5100000, 0x18000, 0xf10b000, 0x1000}
+    clock-gates                    '\\'
+    clock-ids                      {0x127}
+    gfx-qos                        {0x1, 0x1}
+    device_type                    'sgx'
+    AAPL,phandle                   {0x57000000}
+    power-gates                    '\\'
+/arm-io/dart-rt
+    dart-version                   {0x1}
+    compatible                     'dart,s5l8940x' | 'dart,s5l8930x'
+    clock-ids                      {0x126}
+    interrupt-parent               {0xe000000}
+    interrupts                     'u'
+    clock-gates                    'm'
+    invalid-translation-target     {0x30000000}
+    reg                            {0xa400000, 0x2000}
+    AAPL,phandle                   {0x58000000}
+    device_type                    'dart'
+    no-fault-clients               {0x8}
+/arm-io/dart-rt/mapper-isp
+    AAPL,phandle                   {0x59000000}
+    compatible                     'iommu-mapper'
+    iomd-cache-ttl                 {0x7d0}
+    iomd-cache-size                '@'
+    device_type                    'dart-mapper'
+    reg                            {0x0, 0x1, 0x2, 0x3}
+/arm-io/isp
+    camera-front                   {0x1}
+    clock-gates                    'n' | '' | '' | 'o'
+    function-sensor_shutdown       {0xf000000, 0x4750494f, 0x1800, 0x2000101}
+    AAPL,phandle                   {0x5a000000}
+    iommu-parent                   {0x59000000}
+    function-strobe_enable         {0xf000000, 0x4750494f, 0x1703, 0x101}
+    function-sensor_shutdown2      {0xf000000, 0x4750494f, 0x1802, 0x2000001}
+    function-device_reset          {0x10000000, 0x41525354, 0x12}
+    interrupt-parent               {0xe000000}
+    function-cam0_ldo              {0xf000000, 0x4750494f, 0x1300, 0x101}
+    compatible                     'isp,s5l8940x'
+    clock-ids                      {0x12a}
+    camera-rear                    {0x1}
+    interrupts                     {0x7, 0x8}
+    function-sensor_extclk2        {0xf000000, 0x4750494f, 0x1803, 0x2000101}
+    function-sensor_reset2         {0xf000000, 0x4750494f, 0x1303, 0x10001}
+    sensor-type                    {0x7}
+    function-sensor_extclk         {0xf000000, 0x4750494f, 0x1801, 0x2000101}
+    device_type                    'isp'
+    power-gates                    'n'
+    reg                            {0xa000000, 0x100000}
+    function-sensor_reset          {0xf000000, 0x4750494f, 0x1301, 0x10001}
+/arm-io/perfcounter
+    AAPL,phandle                   {0x5b000000}
+    compatible                     'perfcounter,s5l8940x'
+    clock-gates                    '|'
+    device_type                    'perfcounter'
+    reg                            {0xf104000, 0x1000, 0xf800000, 0x1000, 0xd300000, 0x1000}
+/buttons
+    function-button_volup          {0xf000000, 0x4750494f, 0x3, 0x0}
+    function-wake_button_menu      {0x24000000, 0x53544154, 0x180}
+    function-button_voldown        {0xf000000, 0x4750494f, 0x2, 0x0}
+    function-button_menu           {0xf000000, 0x4750494f, 0x0, 0x0}
+    interrupt-parent               {0xf000000}
+    interrupts                     {0x1, 0x7, 0x0, 0x7, 0x3, 0x5, 0x2, 0x5, 0x4, 0x7}
+    AAPL,phandle                   {0x5c000000}
+    function-button_ringerab       {0xf000000, 0x4750494f, 0x4, 0x0}
+    device_type                    'buttons'
+    button-names                   'hold' | 'menu' | 'volup' | 'voldown' | 'ringerab'
+    function-wake_button_hold      {0x24000000, 0x53544154, 0x181}
+    function-button_hold           {0xf000000, 0x4750494f, 0x1, 0x0}
+/dock
+    function-read_acc              {0x24000000, 0x706d7541, 0x3}
+    compatible                     'dock,30pin'
+    function-acc_pwr               {0x24000000, 0x706d754c, 0x205}
+    interrupt-parent               {0x24000000}
+    interrupts                     {0x5}
+    function-acc_sw_en             {0x24000000, 0x706d754c, 0x80000005}
+    AAPL,phandle                   {0x5d000000}
+    function-acc_detect            {0x24000000, 0x53544154, 0x5}
+    device_type                    'dock'
+    function-acc_sleep_pwr         {0x24000000, 0x706d754c, 0x216}
+    function-usb_dock_control      {0x5e000000, 0x55534264, 0x0}
+    primary-port-id                {0x1}
+/charger
+    usb-input-limit-calibration    {0x0, 0x0, 0x0, 0x0}
+    compatible                     'charger,n88'
+    AAPL,phandle                   {0x5e000000}
+    battery-family                 {0x3}
+    function-usb_dmonitor          {0x30000000, 0x444d4f4e, 0x0}
+    boot-adapter-id                {0x0}
+    device_type                    'charger'
+    function-battery_pack          {0x5d000000, 0x61636341, 0xb}
+    function-acc_reverify          {0x5d000000, 0x61636352}
+    charge-limits                  {0x384, 0x23a, 0x1a4, 0x10e}
+    battery-id                     {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    boot-voltage                   {0x0}
+/baseband
+    class                          {0x3}
+    AAPL,phandle                   {0x5f000000}
+    device-imei                    {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    function-bb_on                 {0x24000000, 0x4750494f, 0x2, 0x101}
+    function-bb_usb_mux            {0x24000000, 0x4750494f, 0x3, 0x101}
+    function-pmu_exton             {0x24000000, 0x4750494f, 0x1, 0x100}
+    function-hsic_ready            {0xf000000, 0x4750494f, 0x1501, 0x101}
+    imeisv                         {0xa}
+    function-bb_rst                {0xf000000, 0x4750494f, 0x102, 0x0}
+    function-bb_gpio               {0xf000000, 0x4750494f, 0x204, 0x0}
+    region-sku                     {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
+    interrupt-parent               {0xf000000}
+    function-bb_pmu_rst            {0xf000000, 0x4750494f, 0x107, 0x0}
+    compatible                     'baseband,n94'
+    function-radio_on              {0xf000000, 0x4750494f, 0x106, 0x0}
+    function-sac                   {0x61000000, 0x53414343, 0x6c636430}
+    interrupts                     {0xb, 0x4}
+    function-erase_efs_done        {0xf000000, 0x4750494f, 0x600, 0x100}
+    function-bb_ldo                {0x24000000, 0x706d754c, 0x20e}
+    device_type                    'baseband'
+    function-reset_det             {0xf000000, 0x4750494f, 0x103, 0x0}
+    config                         {0x83, 0x177, 0x34bc, 0x3e8, 0x64, 0x64, 0x83, 0x25, 0x14}
+/backlight
+    LminProduct                    {0x5d00d}
+    function-backlight_enable      {0x24000000, 0x626b6c45}
+    AAPL,phandle                   {0x60000000}
+    calibratedMaxCurrent           {0x132148}
+    milliAmps2DACPart2MaxCurrent   {0x190000}
+    backlight-marketing-table      <68 bytes> 0dd0050048ee0a00233a130068a21f002eaf3000c2144600...
+    milliAmps2DACTablePart1        <512 bytes> 0000000000000000000038007400a700d300f9001c013b01...
+    iDAC2MilliAmpsTable            <1024 bytes> 85000000880000008b0000008f0000009200000096000000...
+    LmidProduct                    {0x8c0000}
+    display-backlight-calibration  {0x0}
+    milliAmps2DACPart1MaxCurrent   {0x30000}
+    nits2mAmps1stOrderCoef         {0x1333b6}
+    compatible                     'backlight'
+    milliAmps2DACTablePart2        <256 bytes> 4505580569057a0589059905a705b505c205cf05db05e705...
+    LmaxProduct                    {0x1d10000}
+    function-backlight_update      {0x3b000000, 0x64776942, 0x0}
+    nits2mAmps2ndOrderCoef         {0xc823}
+    calibratedMidCurrent           {0x5bd71}
+    mA2Nits1stOrderCoef            {0xd4e}
+    mA2Nits2ndOrderCoef            {0xfffffff9}
+    use-AAB-architecture           {0x1}
+    device_type                    'backlight'
+    backlight-id                   {0xffffffff}
+/sacm
+    compatible                     'sacm,1'
+    AAPL,phandle                   {0x61000000}
+/defaults
+    kern.hibernation_min_processes {0x4}
+    kern.maxkfsevents              {0x400}
+    AAPL,phandle                   {0x62000000}
+    use-lwvm                       <empty>
+    data-journaling                <empty>
+    kern.maxvnodes                 {0x4e2}
+    kern.sched                     'traditional_with_pset_runqueue'
+    content-protect                <empty>
+/product
+    lockdown-certtype              {0x1}
+    AAPL,phandle                   {0x63000000}
+    assistant                      {0x1}
+    product-id                     {0x0, 0x0, 0x0, 0x0, 0x0}
+    dictation                      {0x1}
+    camera-panorama                {0x1}
+    itunes-min-ver                 {0xa0603}
+    udid-version                   {0x1}
+    video-cap                      {0x2}
+/product/facetime
+    AAPL,phandle                   {0x64000000}
+    bitrate-3g                     {0xe4}
+    decoding                       {0x140, 0xf0000f, 0x140, 0xf0001e}
+    bitrate-2g                     'd'
+    bitrate-wifi                   {0x322}
+    encoding                       {0x140, 0xf0000f, 0x140, 0xf0001e, 0x1e0, 0x170001e, 0x280, 0x1e0001e}
+/product/maps
+    AAPL,phandle                   {0x65000000}
+    navigation                     {0x0}
+    3d-imagery                     {0x0}
+    3d-maps                        {0x0}
