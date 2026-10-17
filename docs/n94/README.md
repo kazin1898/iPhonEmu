@@ -9,7 +9,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 
 | | What | Proof | State |
 |---|---|---|---|
-| M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | pending (machine not written yet) |
+| M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
 | M2 | `launchd` and its daemons | serial log | pending |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | screenshot | pending |
 | M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
@@ -47,11 +47,40 @@ boards get (identity, flags, clocks, NVRAM proxy image, memory map, sgx unmatche
 - `--nand raw` (default): the A4 raw-NAND geometry and `ppn-device 0`; `--nand ppn` keeps PPN.
 - `--hide NODE` unmatches any further node; `--verbose-boot` appends `-v`.
 
-## Booting (planned command)
+## Booting
+
+From the repository root (the Windows build is `build/qemu-system-arm.exe`, run from the MSYS2 UCRT64
+shell so its DLLs resolve):
 
 ```
-qemu-system-arm -M iPhone-4S,kboot=firmware/n94_10B329/kboot.bin -serial stdio -display none
+build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin -serial stdio -display none \
+    -d unimp,guest_errors -D ../runs/n94/m1.log
 ```
 
-The machine (`hw/arm/n94.c`, `hw/arm/s5l8940*.c`) is Phase 2 of the plan; its first job is the
-kernel's early console on uart0 (0x32500000) with the AIC at 0x3F200000 and the PMGR timer.
+`-trace 's5l8940_aic*'` logs every AIC access (the timer and FIQ included). For a bounded run whose
+qemu log is flushed, quit through the monitor instead of killing the process:
+`(sleep 150; echo quit) | build/qemu-system-arm ... -serial file:../runs/n94/m1-serial.log -monitor stdio`
+(`runs/n94/run-m1.sh`, outside the repository, does this). Note that `-trace file=` also receives the
+`-d` log output.
+
+### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
+
+The machine (`hw/arm/n94.c`) has one Cortex-A9, 512 MiB at 0x80000000 (its first page aliased at PA 0),
+the AIC (`hw/arm/s5l8940_aic.c`, register map in `hardware.md`), the A4 PMGR and GPIO models at the A5
+addresses, QEMU's `l2x0` for the PL310 and the two Samsung UARTs; everything else in 0x30000000-0x3FFFFFFF
+is an unimplemented-device window. What the kernel does with it:
+
+- The serial console comes up in `PE_init_iokit`: the first bytes on uart0 are `iBoot version:
+  iBoot-1537.9.55`. The `Darwin Kernel Version 13.0.0 ... RELEASE_ARM_S5L8940X` banner is printed before
+  that and goes only to the kernel's message buffer (`pmemsave` of DRAM finds the copy at 0x8146dee0 next to
+  the `version` string itself at 0x802cfbec); `-v` does not change that, so it never reaches the UART.
+- corecrypto's FIPS tests, AMFI (disabled by the boot-args), `AppleS5L8940XIO` (chip revision B0),
+  backlight, `AppleInterruptController` (`_aicVersion = 0 _aicNumExtInts = 0xc0 _aicNumIPIs = 4`), GPIO,
+  the performance controller's tables, PL310, spi1, the three I2C controllers, MIPI-DSI, DisplayPort, the
+  I2S controllers, both scalers, VXE, the camera (`AppleH4CamIn::start`) all start without faults.
+- The clock runs: the rtclock's deadline FIQs are acked and re-armed (about 20,000 in 150 s), so IOKit
+  matching proceeds on the scheduler. The A5 PMGR has clock registers the A4 model does not know (listed in
+  `hardware.md`); they read as zero and nothing complains yet.
+- `AppleARMPE::getGMTTimeOfDay can not provide time of day RTC did not show up` (no PMU on i2c0), then
+  `Waiting on <dict ...IOMedia... Partition ID 0x1>`, AppleCLCD and RGBOUT start, and the kernel sits at
+  `Still waiting for root device`: M2 is the NAND (the IOP's FMI path or a PPN model) and the PMU.

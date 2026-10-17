@@ -19,7 +19,7 @@ Kernel: `Darwin Kernel Version 13.0.0 ... root:xnu-2107.7.55.2.2~1/RELEASE_ARM_S
 | DRAM | 0x80000000, 512 MiB | `memory` reg is iBoot-filled. Kernel VA == PA at slide 0, so no KASLR slide is applied. vram (9,420,800 B) and pram (16 KiB) sit at the top, iBoot's layout. |
 | SRAM / boot ROM | not in the DT | not needed for kboot. |
 | Timebase | 24 MHz | `timebase-frequency`, `fixed-frequency` on cpu0 (iBoot-filled). |
-| Timers | inside PMGR (`device_type timer`) | no separate node; the A4 kernel's event timer is PMGR+0x2000 (`s5l8930_pmgr.c`). To confirm on A5. |
+| Timers | the AIC's per-CPU timer and 64-bit counter (below) | the PMGR is still `device_type timer` (its node is what `pe_arm_init_timer` maps) but the 10B329 kernel's rtclock never touches the A4 event timers at PMGR+0x2000: mach_absolute_time is AIC TIME_LO/HI and the deadline the AIC TMR_CNT, acked on FIQ. |
 | Watchdog | 0x3F103020+0x10, AIC 4 | `wdt,s5l8940x|s5l8930x|s5l8920x` **A4** (inside the PMGR window). |
 
 `arm-io` ranges: child 0x0 -> parent 0x30000000, size 0x10000000. Every `reg` below is absolute.
@@ -30,8 +30,45 @@ with the same low bits: the display, DMA, USB, UART, SPI and PKE blocks keep the
 
 | Item | A5 (n94) | Notes |
 |---|---|---|
-| AIC | 0x3F200000+0x10000, `aic,1`, `#main-cpus` | **new**. Replaces the A4's four PL192 VICs (0xBF200000). Driver `AppleInterruptController`. The Linux `apple-aic` driver (M1, AIC v1 register layout: event register, hw IRQ mask/unmask, IPI) and n94linux are the references; the A5's register map has to be confirmed against the kext. |
+| AIC | 0x3F200000+0x10000, `aic,1`, `#main-cpus` 2 | `hw/arm/s5l8940_aic.c`. Replaces the A4's four PL192 VICs (0xBF200000). Register map confirmed against the `AppleInterruptController` kext (see "The AIC" below); the Linux `apple-aic` version-1 layout agrees. |
 | GPIO | 0x3FA00000, AIC 119, `gpio,s5l8940x|gpio,s5l8930x`, 2 interrupt cells | **A4** `s5l8930_gpio.c` (the A4 GPIO is VIC 0x74). Buttons, PMU, touch, sensors and the radios interrupt through it. |
+
+## The AIC, as the 10B329 kext drives it
+
+Decoded from `AppleInterruptController` (kernelcache `__PRELINK_TEXT`, text at 0x80b060b0; `_aicVersion = 0`
+since the DT has no `aic-version`, `_aicNumExtInts = 0xc0`, `_aicNumIPIs = 4`) and from the kernel's rtclock
+seen through the model's trace (`-trace 's5l8940_aic*'`). Offsets from 0x3F200000:
+
+| Offset | Register | What the kext does |
+|---|---|---|
+| 0x0004 | INFO | `[9:0]` external vectors (192), `[20:16]` CPUs - 1; the kext sizes its tables from it |
+| 0x0010 | GLB_CFG | read, then written back with 0x70 ORed in (0x770 when `aic-version` != 0) at start |
+| 0x0020 / 0x0028 | TIME_LO / TIME_HI | the kernel's timebase: read HI, LO, HI (24 MHz, the DT `timebase-frequency`) |
+| 0x2000 | WHOAMI | the CPU reading; the IPI vector is `numExtInts + 2 * whoami (+1 for "other")` |
+| 0x2004 | IACK | event: `[18:16]` type, 0 none (ends the handler's loop), 1 external vector in `[9:0]`, 4 IPI with `[1:0]` 1 = from another CPU, 2 = self; type 6 is `kAICIackVecTypeTimer`, which the kext panics on (the timer is FIQ, not IACK) |
+| 0x2008 | IPI_SET | `ipi_dispatch` (vector 0xc0): bit 31 = self; `ipi_dispatch_other` (0xc1): bit n = CPU n |
+| 0x200c | IPI_CLR | the handler clears the bit it took (1 or 0x80000000) |
+| 0x2010..0x2020 | TMR_CFG, TMR_CNT, TMR_INT_STAT, TMR_STATE_SET/CLR | the current CPU's timer (the kernel's, below); `aic-version 0` propagates CPU 0's TMR_CFG to the others at start |
+| 0x2024 / 0x2028 | IPI_MASK_SET / CLR | bit 0 "other", bit 31 "self" |
+| 0x3000 + 4n | TARGET_CPU[n] | start writes 0 to all; a registered vector gets `(1 << #main-cpus) - 1` or its `target-destinations` entry (0x87 -> 1, 0x8b -> 2) |
+| 0x4000 / 0x4080 + 4w | SW_SET / SW_CLR | software vectors (`ipid-mask` bits 0-3): set to trigger, cleared by the handler after dispatch |
+| 0x4100 / 0x4180 + 4w | MASK_SET / MASK_CLR | start masks everything; `enableVector` clears, `disableVectorHard` sets; sleep saves the mask by reading 0x4180 |
+| 0x4200 + 4w | HW_STATE | `callPlatformFunction("STAT")` reads a line's level |
+| 0x5000 + 0x80 c + 0x10..0x28 | CPU c's bank | the 0x2010..0x2028 registers of any CPU: start masks every CPU's IPIs (0x5024 <- 0x80000001) and sleep/wake save and restore TMR_CFG and the IPI mask |
+
+Acknowledging through IACK does **not** mask the vector: the handler never unmasks after dispatch, so a
+level line that stays up is reported again on the next IACK (the model does the same). The kernel's
+rtclock: at init TMR_CNT <- 0x7fffffff, TMR_CFG <- 1, TMR_INT_STAT <- 1; each deadline is a TMR_CNT write
+(ticks from now, 24 MHz); the FIQ entry (0x80087b0c, reached through the FIQ-mode r9 the vector's
+`mov pc, r9` uses) writes TMR_INT_STAT <- 1 and dispatches through `cpu_data + 0x30`. Two things the model
+had to get right for the kernel to keep its clock (`hw/arm/s5l8940_aic.c` has the trace evidence):
+
+- The timer **reloads** its count when it reaches zero: the kernel acks some FIQs without writing a new
+  TMR_CNT and waits for the next one.
+- The FIQ is **held until GLB_CFG has 0x70**: the kernel arms its first 9.5 ms deadline before the FIQ
+  dispatcher has a callback (`cpu_data + 0x30` is NULL, the event is acked and dropped), and never re-arms
+  after a dropped one, so a FIQ delivered before `AppleInterruptController::start` stops the clock for good.
+  Which of the three bits gates it is unknown; the model uses all of them.
 
 ## Platform blocks
 
@@ -102,9 +139,23 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 
 ## Open points for the machine model
 
-1. **AIC register map** (version 1 on the A5) and how the kernel routes the timer (FIQ on the A4).
-2. **PMGR timer / clock table**: the A5's `clock-frequencies` index map; `ios-prep` writes the A4 map.
-3. **I2C**: `i2c,s5l8940x` vs `i2c,s5l8930x` register layout.
-4. **Storage**: raw NAND through the IOP's FMI firmware vs a PPN model.
-5. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
-6. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
+1. ~~AIC register map~~: confirmed against the kext (section above). Still open in the model: which GLB_CFG
+   bit gates the timer FIQ, whether the timer reload is a true auto-reload or a count that keeps running,
+   the per-CPU timer on cpu1 (`0x5090 <- 1` at start, no FIQ line yet), and what the kernel expects of an
+   IPI it sends itself (0x2008 <- 0x80000000 while the IPI vector is still masked; with the clock running it
+   moves on).
+2. **PMGR timer / clock table**: the A5's `clock-frequencies` index map; `ios-prep` writes the A4 map. The
+   A5 PMGR has registers the A4 model does not know and the kernel reads back as zero without complaint so
+   far: clock configs 0x220-0x254 and 0x2f0-0x2f8, 0x3c, gates 0x1110-0x115c and 0x1180, 0x1204, 0x2108
+   (<- 0x51), 0x3100-0x3108. The wdt at +0x3020 (A4: +0x2020) has not been touched by 10B329 yet.
+3. **Unmodeled blocks the kernel writes at boot** (reads come back 0, nothing complains): CDMA 0x37000008
+   and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000, i2s-switch 0x3FA01000-0x3FA0103C
+   (all 0), the PL310 "cif" window 0x3FD01020 (<- 1) and 0x3FD01120 (<- 0x80000100). `AppleH4CamIn::start`
+   (isp) and `AppleSamsungDPTXControllerS5L8940X` start without faulting on the unimplemented window.
+4. **PMU**: `AppleARMPE::getGMTTimeOfDay can not provide time of day RTC did not show up`: no D1881 on
+   i2c0 yet (`i2c,s5l8940x` layout to compare first, point 5).
+5. **I2C**: `i2c,s5l8940x` vs `i2c,s5l8930x` register layout.
+6. **Storage** (M2: the kernel sits at `Still waiting for root device`): raw NAND through the IOP's FMI
+   firmware vs a PPN model.
+7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
+8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
