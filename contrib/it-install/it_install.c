@@ -19,14 +19,18 @@
  *      later are ordinary pages;
  *   3. writes an MBR with two Apple_HFS partitions: the system volume and the data volume (the
  *      MBR last, so a half-done install is not taken for a finished one);
- *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, mounts it,
- *      creates the directories iOS expects under /private/var and writes launchd's overrides
- *      database (db/launchd.db/com.apple.launchd/overrides.plist) disabling keybagd (without the
- *      system keybag (B4, effaceable storage and MobileKeyBag, not done yet) its kb_load fails
- *      and it reboots the device into recovery 20 s after launchd) and the Bluetooth jobs (no
- *      controller behind uart3, as on the fork's A4 boards). The system volume stays as Apple
- *      shipped it; the knobs live on the emulator's data volume;
- *   5. syncs and halts.
+ *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, mounts it at
+ *      /mnt2 and creates the directories iOS expects under /private/var;
+ *   5. execs it_keybag (contrib/it-install/it_keybag.c, dyld-linked, staged on the ramdisk by
+ *      guest_install.py), the data-protection step: it formats the effaceable storage and
+ *      creates the system keybag at /mnt2/keybags/systembag.kb, as restored_external does on a
+ *      real restore and the fork's it_keybag on the A4 boards;
+ *   6. writes launchd's overrides database (db/launchd.db/com.apple.launchd/overrides.plist)
+ *      disabling the Bluetooth jobs (no controller behind uart3, as on the fork's A4 boards) and,
+ *      only if step 5 failed, keybagd (without the system keybag its kb_load fails and it reboots
+ *      the device into recovery 20 s after launchd). The system volume stays as Apple shipped it;
+ *      the knobs live on the emulator's data volume;
+ *   7. syncs and halts.
  *
  * Every step is idempotent: a second run finds the MBR ("already installed") and only repairs a
  * data partition with no volume. Progress goes to the console as "it_install: ..." lines; the end is
@@ -79,6 +83,7 @@
 #define DATA_DEV "/dev/rdisk0s2"
 #define DATA_BDEV "/dev/disk0s2"
 #define DATA_MNT "/mnt2"
+#define KEYBAG_HELPER "/usr/bin/TiSerialFlasher"   /* it_keybag's slot on the ramdisk (guest_install.py) */
 
 typedef long ssize_t;
 
@@ -349,33 +354,39 @@ static void mkdir_as(const char *path, int mode, int uid)
 #define O_CREAT 0x200
 #define O_TRUNC 0x400
 
-static int write_file(const char *path, const char *data, uint32_t len)
+/*
+ * launchd's overrides (what `launchctl unload -w` writes): BTServer and BlueTool off as the fork keeps
+ * them on the A4 boards (docs/ipad1/README.md "Bluetooth: parked"): there is no Bluetooth controller
+ * behind uart3, and BlueTool's HCI traffic through AppleOnboardSerial's rx DMA path ended in a kernel
+ * assertion (AppleSimpleUARTSync.cpp:2177). keybagd off only when it_keybag left no system keybag.
+ */
+static const char overrides_head[] =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+    "<plist version=\"1.0\">\n<dict>\n"
+    "\t<key>com.apple.BTServer</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
+    "\t<key>com.apple.BlueTool</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n";
+static const char overrides_keybagd[] =
+    "\t<key>com.apple.mobile.keybagd</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n";
+static const char overrides_tail[] = "</dict>\n</plist>\n";
+
+static int write_overrides(const char *path, int keybagd_off)
 {
     long fd = sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
-    long n;
+    long n = 0;
 
     if (fd < 0) {
         return -1;
     }
-    n = sys(SYS_write, fd, (long)data, len, 0);
+    n += sys(SYS_write, fd, (long)overrides_head, sizeof(overrides_head) - 1, 0);
+    if (keybagd_off) {
+        n += sys(SYS_write, fd, (long)overrides_keybagd, sizeof(overrides_keybagd) - 1, 0);
+    }
+    n += sys(SYS_write, fd, (long)overrides_tail, sizeof(overrides_tail) - 1, 0);
     sys(SYS_close, fd, 0, 0, 0);
-    return n == (long)len ? 0 : -1;
+    return n == (long)(sizeof(overrides_head) + sizeof(overrides_tail) - 2 +
+                       (keybagd_off ? sizeof(overrides_keybagd) - 1 : 0)) ? 0 : -1;
 }
-
-/*
- * launchd's overrides (what `launchctl unload -w` writes): keybagd off until B4 gives it a keybag;
- * BTServer and BlueTool off as the fork keeps them on the A4 boards (docs/ipad1/README.md
- * "Bluetooth: parked"): there is no Bluetooth controller behind uart3, and BlueTool's HCI traffic
- * through AppleOnboardSerial's rx DMA path ended in a kernel assertion (AppleSimpleUARTSync.cpp:2177).
- */
-static const char overrides[] =
-    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-    "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-    "<plist version=\"1.0\">\n<dict>\n"
-    "\t<key>com.apple.mobile.keybagd</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
-    "\t<key>com.apple.BTServer</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
-    "\t<key>com.apple.BlueTool</key>\n\t<dict>\n\t\t<key>Disabled</key>\n\t\t<true/>\n\t</dict>\n"
-    "</dict>\n</plist>\n";
 
 /* The data volume gets the directories launchd and the daemons expect (restored's skeleton) and the
  * overrides database; every step is idempotent, so this runs on every install boot. */
@@ -383,6 +394,7 @@ static void populate_data(int con)
 {
     static const char *const fsck[] = { "fsck_hfs", "-fy", DATA_DEV, 0 };
     static const char *const mount[] = { "mount_hfs", DATA_BDEV, DATA_MNT, 0 };
+    static const char *const keybag[] = { "it_keybag", 0 };
     static const char *const dirs[] = {
         "/db", "/db/timezone", "/empty", "/folders", "/keybags", "/log", "/logs", "/logs/CrashReporter",
         "/msgs", "/preferences", "/preferences/SystemConfiguration", "/root", "/root/Library", "/run",
@@ -395,6 +407,7 @@ static void populate_data(int con)
     };
     char path[96];
     uint32_t i, j, k;
+    int kb;
 
     run(con, "/sbin/fsck_hfs", fsck);        /* a volume the last boot left mounted needs its journal replayed */
     if (run(con, "/sbin/mount_hfs", mount) != 0) {
@@ -422,9 +435,14 @@ static void populate_data(int con)
         mkdir_as(path, mode, uid);
     }
     mkdir_as(DATA_MNT "/tmp", 01777, 0);
-    say_num(con, "it_install: launchd overrides (keybagd, BTServer, BlueTool disabled) -> ",
-            (uint32_t)write_file(DATA_MNT "/db/launchd.db/com.apple.launchd/overrides.plist", overrides,
-                                 sizeof(overrides) - 1));
+    /* The data-protection step, with the data volume mounted: the effaceable format needs the trusted
+     * root this ramdisk is, and the keybag goes to DATA_MNT/keybags. Its stdout/stderr reach the console
+     * (dyld's own complaints included). */
+    kb = run(con, KEYBAG_HELPER, keybag);
+    say(con, kb == 0 ? "it_install: system keybag in place, keybagd stays enabled\n"
+                     : "it_install: no system keybag (it_keybag failed), keybagd disabled\n");
+    say_num(con, "it_install: launchd overrides (BTServer, BlueTool disabled) -> ",
+            (uint32_t)write_overrides(DATA_MNT "/db/launchd.db/com.apple.launchd/overrides.plist", kb != 0));
     sys(SYS_sync, 0, 0, 0, 0);
     say_num(con, "it_install: data volume populated, unmount -> ",
             (uint32_t)sys(SYS_unmount, (long)DATA_MNT, 0, 0, 0));

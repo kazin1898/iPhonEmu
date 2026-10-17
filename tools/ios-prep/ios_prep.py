@@ -7,8 +7,8 @@
                         (--ramdisk restore|update --ipsw IPSW: boot the IPSW's ramdisk as root, rd=md0;
                          --ramdisk-file IMAGE: that image instead; --bundle FILE: the output's place)
   ios_prep.py nand      --out DIR                  a blank PPN page store for -M iPhone-4S,nand=DIR
-  ios_prep.py install   DIR --nand NAND --out OUT  the install boot: it_install built for this rootfs,
-                        markers.json in the store, the restore ramdisk with the helper (docs/n94/README.md)
+  ios_prep.py install   DIR --nand NAND --out OUT  the install boot: it_install and it_keybag built for this
+                        rootfs, markers.json in the store, the restore ramdisk with the helpers (docs/n94/README.md)
   ios_prep.py inventory DIR [--docs DOCS]          device-tree dump and the kernelcache's kext list
 
 Needs the build's keys: --keys JSON, else the cache keys_<build>_<device>.json beside the IPSW, else
@@ -293,10 +293,15 @@ def cmd_install(args):
     helper, info = guest_install.build_helper(blocks, args.out, clang=args.clang, lld=args.lld)
     log(f"it_install: {helper}, {info['code_bytes']} bytes of code in a {info['macho_bytes']}-byte Mach-O, "
         f"table lba {info['system_lba']} + {blocks} blocks")
-    rd = guest_install.make_install_ramdisk(stock, os.path.join(args.out, "ramdisk-install.dmg"), helper)
-    log(f"ramdisk: {rd['ramdisk']}, {rd['bytes']} bytes, helper at blocks {rd['helper_blocks']} as {rd['slot']}")
+    keybag, kinfo = guest_install.build_keybag_helper(args.out, clang=args.clang, lld=args.lld)
+    log(f"it_keybag: {keybag}, {kinfo['code_bytes']} bytes of code in a {kinfo['macho_bytes']}-byte dyld-linked "
+        f"Mach-O, binds {', '.join(kinfo['binds'])} from {kinfo['dylib']}")
+    rd = guest_install.make_install_ramdisk(stock, os.path.join(args.out, "ramdisk-install.dmg"),
+                                            [("/usr/local/bin/restored_external", helper), (kinfo["slot"], keybag)])
+    log(f"ramdisk: {rd['ramdisk']}, {rd['bytes']} bytes, helpers at blocks {rd['helpers']}")
     with open(os.path.join(args.out, "install.json"), "w") as f:
-        json.dump({"helper": info, "ramdisk": rd, "markers": markers, "system_blocks": blocks}, f, indent=2)
+        json.dump({"helper": info, "keybag_helper": kinfo, "ramdisk": rd, "markers": markers,
+                   "system_blocks": blocks}, f, indent=2)
     log("next: kboot DIR --ramdisk restore --ramdisk-file OUT/ramdisk-install.dmg --bundle OUT/kboot.bin --nand ppn "
         "--add-boot-arg nand-enable-reformat=1, then boot with nand=NAND; stop at \"it_install: done\"")
 
