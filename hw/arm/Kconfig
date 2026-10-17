@@ -704,6 +704,13 @@ config IPAD1
     select EXYNOS4
     select IOS_BASEBAND
 
+# iPhone 4S (S5L8940X): the A5 board and its interrupt controller; the
+# PMGR, GPIO and UART models are the A4's.
+config N94
+    bool
+    select IPAD1
+    select PL310
+
 config IPOD_TOUCH_2G
      bool
      select PL192
