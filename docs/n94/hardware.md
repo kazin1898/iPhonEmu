@@ -259,6 +259,18 @@ kernel against the model (`runs/n94/m2-root.log`, `-trace 's5l8940_iop*'`):
   IOFlashNVRAM wipes and formats the nvrm pool ("nand nvram started successfully"), AppleEffaceableNAND
   finds no content. The store keeps all of it (sparse XOR-0xff files, 7 MB on disk after the format), so
   the next boot opens the FTL directly. The kernel then waits for IOMedia partition 1 on that disk: B3.
+- **NVRAM on the NAND** (`IOFlashNVRAM`, `nand_nvram_core.c`): the 8 KiB image is a 0x5a `nvram` CHRP
+  header (adler32 of the rest at +0x10, a generation at +0x14) followed by the 0x70 `common` partition
+  (2 KiB) and a 0x7f filler; each sync writes it as a new generation of six 1536-byte boot pages (a
+  10-byte page header: u32 generation, u8 pages - 1, u8 index, u16 3, u16 0xbead) into the nvrm pool's
+  blocks, one copy per chip (CAU 1 blocks 2042/2043 in the kernel's own table), and the next start scans
+  the copies six pages at a time for the newest generation. What kept it from surviving a boot was the
+  kernel's side, not the store: `IODTNVRAM::initProxyData` takes `chosen/nvram-proxy-data` as the whole
+  image and `registerNVRAMController` then never reads the controller, so every boot synced the seed
+  `ios-prep` used to put there (a `common`/`free` image with no 0x5a header), and `_validateAppleHeader`
+  found "bad signature" and wiped the pool again. With `--nand ppn` the bundle now carries no proxy (the
+  device tree loses the property: an all-zero placeholder would be walked as endless empty partitions)
+  and the kernel reads the image from IOFlashNVRAM, as xnu does on any board without a proxy.
 - The answer interrupt is deferred 100 us after the doorbell, as the A4 HLE does; erases of blocks that
   are already holes are skipped (QEMU's win32 file driver has no unmap, so zeroing would allocate).
 
@@ -276,7 +288,8 @@ What the IPSW says, in order of consequence:
    the kernel refuses to format that table outside a trusted root (`partition table format not allowed in
    this context`; the restore ramdisk's `restored_external`/`ioflashstoragetool` do it).
 2. `IOFlashNVRAM` formats an erased `nvrm` pool by itself ("starting with freshly wiped NVRAM") and publishes
-   the `IONVRAM` restored waits for; `AppleEffaceableNAND` needs a format from a trusted root, as on the A4
+   the `IONVRAM` restored waits for (it keeps its content across boots once the kernel is not fed a proxy
+   image, see "NVRAM on the NAND" above); `AppleEffaceableNAND` needs a format from a trusted root, as on the A4
    (docs/ipad1/ios4.md "The blocker"), and the system keybag needs that.
 3. `AppleSwissPPNFTL` formats an unformatted bulk partition itself when the boot-args carry
    `nand-enable-reformat=1` (`_DestructiveFormat`: FPart, VFL, FTL, then the signature); without it: "Unformatted

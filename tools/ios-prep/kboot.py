@@ -109,7 +109,8 @@ def synthesize_identity(seed, board):
 
 
 def nvram_image(size):
-    """An empty CHRP NVRAM as IODTNVRAM parses it: a 2 KiB "common" partition, the rest "free"."""
+    """An empty CHRP NVRAM as IODTNVRAM parses it: a 2 KiB "common" partition, the rest "free" (for the
+    boards whose NVRAM the kernel only ever sees through this proxy; see fill_dt)."""
     def part(sig, name, units):
         h = bytearray([sig, 0, units & 0xFF, units >> 8]) + name.encode() + b"\0" * (12 - len(name))
         c = h[0]
@@ -170,8 +171,15 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
     dt.set_if("chosen", "display-rotation", 0)
     dt.set_if("chosen", "display-scale", board.scale)
     dt.set("chosen", "root-matching", root_matching)
+    # NVRAM: iBoot hands the kernel its image as chosen/nvram-proxy-data and IODTNVRAM then never reads
+    # the controller (registerNVRAMController skips the read when proxied; it only writes the image back
+    # on sync). A board whose NVRAM is on the NAND (IOFlashNVRAM, --nand ppn) must not get a seed: the
+    # seed would replace what the last boot saved, every boot, and lacks the 0x5a "nvram" header
+    # IOFlashNVRAM validates. Without the property the kernel reads the image from the controller.
     n = dt.slot_len("chosen", "nvram-proxy-data")
-    if n:
+    if n and nand == "ppn":
+        dt.remove("chosen", "nvram-proxy-data")
+    elif n:
         dt.set("chosen", "nvram-proxy-data", nvram_image(n))
     if product_id and dt.slot_len("product", "product-id") == len(product_id):
         dt.set("product", "product-id", product_id)
@@ -283,9 +291,10 @@ def build(kernel, devicetree, identity, boot_args=DEFAULT_BOOT_ARGS, iboot=None,
         memory_map.append(("RAMDisk", pa(rd_va), rd_len))
     fill_dt(dt, board, memory_map, identity, iboot_version(iboot), ROOT_MATCHING, cpus=cpus, nand=nand,
             product_id=product_id_from_iboot(iboot), hide=hide)
-    if len(dt.data) != dt_len:
+    if len(dt.data) > dt_len:
         raise RuntimeError("device tree grew after layout")
-    image[dt_va - vbase:dt_va - vbase + dt_len] = dt.data
+    # a property fill_dt removed leaves zeros at the end of the slot, past the tree the kernel walks
+    image[dt_va - vbase:dt_va - vbase + dt_len] = bytes(dt.data).ljust(dt_len, b"\0")
 
     # boot_args: rev 1, Version as the kernel checks it; video {base, display, rowbytes, w, h, depth}.
     verbose = any(a in ("-v", "-s") for a in boot_args.split())

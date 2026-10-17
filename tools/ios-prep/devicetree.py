@@ -3,8 +3,9 @@
 Node = u32 nprops, u32 nchildren, props {char name[32]; u32 length (bit 31 set: a placeholder iBoot
 fills); value padded to 4}, then the children. Paths join the nodes' "name" properties below the root
 with "/" ("" is the root, "arm-io/uart0"); a later node with the same path shadows an earlier one.
-set() writes into the existing slot and never resizes; add()/add_node() grow the blob, so lay memory
-out after the last one. (Layout after FirmwareKit's DeviceTree.swift / qemu-ios ipad1_kboot.py.)
+set() writes into the existing slot and never resizes; add()/add_node() grow the blob and remove()
+shrinks it, so lay memory out after the last one. (Layout after FirmwareKit's DeviceTree.swift /
+qemu-ios ipad1_kboot.py.)
 """
 import struct
 
@@ -123,6 +124,19 @@ class DeviceTree:
         start = node[0]
         n = struct.unpack_from("<I", self.data, start + 4)[0]
         self.data[start + 4:start + 8] = le([n + 1])
+        self._reparse()
+
+    def remove(self, path, prop):
+        """Drop a property, record and all (a placeholder iBoot would fill is worse than none: IODTNVRAM
+        walks an all-zero nvram-proxy-data as partitions of length 0 and never ends)."""
+        s = self.props.get(path, {}).get(prop)
+        if s is None:
+            raise KeyError(f"DeviceTree: no {path}:{prop}")
+        off, length = s
+        start = self.nodes[path][0]
+        del self.data[off:off + 36 + ((length + 3) & ~3)]
+        n = struct.unpack_from("<I", self.data, start)[0]
+        self.data[start:start + 4] = le([n - 1])
         self._reparse()
 
     def rename(self, path, old, new):

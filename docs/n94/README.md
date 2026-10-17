@@ -41,7 +41,8 @@ A5 with no slide), the filled device tree at 0x80DA8000 and a boot_args page at 
 **Version 18**, which is what this kernel's `pe_identify_machine` compares against (the A4 6.x
 kernels want 3; `ios-prep` reads the value off each kernel). `memSize` is 512 MiB minus vram and
 pram, `topOfKernelData` 0x80DBD000 rounded to 16 KiB. The device tree gets the iBoot fills the A4
-boards get (identity, flags, clocks, NVRAM proxy image, memory map, sgx unmatched, test IMEI) plus:
+boards get (identity, flags, clocks, memory map, sgx unmatched, test IMEI; the NVRAM proxy image only
+without `--nand ppn`, since with the NVRAM on the NAND the kernel must read it from IOFlashNVRAM) plus:
 
 - `--cpus 1` (default for bring-up): `cpus/cpu1` is unmatched (`device_type off`, name `xcpu`).
 - `--nand raw` (default): the A4 raw-NAND geometry and `ppn-device 0`; `--nand ppn` keeps PPN.
@@ -110,6 +111,9 @@ build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=.
 The first boot formats the FTL (nine minutes of emulated erases and writes); later boots open it. The
 kernel reaches `FTL_Open [OK]`, the 1953125-sector block device and `IOFlashNVRAM::start: nand nvram
 started successfully`, then waits for partition 1 of that disk (`hardware.md` "Storage: the PPN mailbox").
+NVRAM persists: a restore-ramdisk boot (`--ramdisk restore --nand ppn`, `runs/n94/m2-rd.log`) runs
+`/usr/sbin/nvram`, syncs ("committing changes... done"), reboots, and the next start reads the saved
+generation back instead of "starting with freshly wiped NVRAM".
 Next: B3, the system volume on the FTL's disk (an install boot on the restore ramdisk writing the MBR and
 marker sectors the page store maps onto `rootfs.hfs`), then B4 (effaceable storage and the keybag).
 
