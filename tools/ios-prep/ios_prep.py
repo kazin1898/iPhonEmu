@@ -4,7 +4,11 @@
   ios_prep.py info      IPSW                      what the IPSW is (device, build, components)
   ios_prep.py prepare   IPSW --out DIR [options]   decrypt kernel/DT/iBoot, expand the rootfs, build kboot.bin
   ios_prep.py kboot     DIR [options]              rebuild kboot.bin from a prepared directory
-                        (--ramdisk restore|update --ipsw IPSW: boot the IPSW's ramdisk as root, rd=md0)
+                        (--ramdisk restore|update --ipsw IPSW: boot the IPSW's ramdisk as root, rd=md0;
+                         --ramdisk-file IMAGE: that image instead; --bundle FILE: the output's place)
+  ios_prep.py nand      --out DIR                  a blank PPN page store for -M iPhone-4S,nand=DIR
+  ios_prep.py install   DIR --nand NAND --out OUT  the install boot: it_install built for this rootfs,
+                        markers.json in the store, the restore ramdisk with the helper (docs/n94/README.md)
   ios_prep.py inventory DIR [--docs DOCS]          device-tree dump and the kernelcache's kext list
 
 Needs the build's keys: --keys JSON, else the cache keys_<build>_<device>.json beside the IPSW, else
@@ -26,6 +30,7 @@ sys.path.insert(0, HERE)
 import img3  # noqa: E402
 import kboot  # noqa: E402
 import nand_ppn  # noqa: E402
+import guest_install  # noqa: E402
 import keys as keymod  # noqa: E402
 import lzss  # noqa: E402
 from devicetree import DeviceTree  # noqa: E402
@@ -123,7 +128,7 @@ def ramdisk_image(out_dir, args, ip=None):
     which = args.ramdisk
     if not which:
         return None
-    path = os.path.join(out_dir, f"ramdisk-{which}.dmg")
+    path = getattr(args, "ramdisk_file", None) or os.path.join(out_dir, f"ramdisk-{which}.dmg")
     if not os.path.exists(path):
         if ip is None:
             if not args.ipsw:
@@ -156,11 +161,13 @@ def build_kboot(out_dir, args, ip=None):
                                                       cpus=args.cpus, nand=args.nand, hide=args.hide or (),
                                                       ramdisk=ramdisk_image(out_dir, args, ip))
     blob = kboot.bundle(image, load_pa, entry, ba_pa)
-    out = os.path.join(out_dir, "kboot.bin")
+    out = getattr(args, "bundle", None) or os.path.join(out_dir, "kboot.bin")
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "wb") as f:
         f.write(blob)
     info["kboot"] = {"bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
-    with open(os.path.join(out_dir, "kboot.json"), "w") as f:
+    info["boot_args"] = boot_args
+    with open(os.path.splitext(out)[0] + ".json", "w") as f:
         json.dump(info, f, indent=2, default=lambda v: "0x%x" % v if isinstance(v, int) else v)
     log(f"kboot.bin: {len(blob)} bytes, load 0x{load_pa:08x} entry 0x{entry:08x} boot_args 0x{ba_pa:08x} "
         f"(Version {info['boot_args_version']}, {args.cpus} cpu(s), nand={args.nand}"
@@ -273,6 +280,27 @@ def cmd_nand(args):
         f"blocks: " + ", ".join(f"{n}:{a}:{b}" for n, t, a, b, fl in nand_ppn.partition_specs()))
 
 
+def cmd_install(args):
+    """The install boot's pieces: the helper for this rootfs, markers.json in the store, the ramdisk."""
+    rootfs = os.path.join(args.dir, "rootfs.hfs")
+    stock = os.path.join(args.dir, "ramdisk-restore.dmg")
+    if not os.path.exists(stock):
+        ramdisk_image(args.dir, argparse.Namespace(ramdisk="restore", ramdisk_file=None, ipsw=args.ipsw,
+                                                   keys=args.keys))
+    os.makedirs(args.out, exist_ok=True)
+    markers, blocks = guest_install.write_markers(args.nand, rootfs)
+    log(f"markers: {markers} (source 0 = rootfs.hfs, {blocks} blocks of 4 KiB)")
+    helper, info = guest_install.build_helper(blocks, args.out, clang=args.clang, lld=args.lld)
+    log(f"it_install: {helper}, {info['code_bytes']} bytes of code in a {info['macho_bytes']}-byte Mach-O, "
+        f"table lba {info['system_lba']} + {blocks} blocks")
+    rd = guest_install.make_install_ramdisk(stock, os.path.join(args.out, "ramdisk-install.dmg"), helper)
+    log(f"ramdisk: {rd['ramdisk']}, {rd['bytes']} bytes, helper at blocks {rd['helper_blocks']} as {rd['slot']}")
+    with open(os.path.join(args.out, "install.json"), "w") as f:
+        json.dump({"helper": info, "ramdisk": rd, "markers": markers, "system_blocks": blocks}, f, indent=2)
+    log("next: kboot DIR --ramdisk restore --ramdisk-file OUT/ramdisk-install.dmg --bundle OUT/kboot.bin --nand ppn "
+        "--add-boot-arg nand-enable-reformat=1, then boot with nand=NAND; stop at \"it_install: done\"")
+
+
 def cmd_inventory(args):
     rows, kexts, ver = write_inventory(args.dir, args.docs)
     print(ver)
@@ -291,6 +319,8 @@ def add_kboot_opts(p):
     p.add_argument("--hide", action="append", metavar="NODE", help="DT node to unmatch (repeatable)")
     p.add_argument("--ramdisk", choices=("restore", "update"),
                    help="stage the IPSW's restore or update ramdisk as the root (rd=md0): launchd with no NAND")
+    p.add_argument("--ramdisk-file", metavar="IMAGE", help="stage this raw HFS+ image instead of the IPSW's ramdisk")
+    p.add_argument("--bundle", metavar="FILE", help="write the bundle here instead of DIR/kboot.bin (and its .json)")
     p.add_argument("--seed", default="iPhonEmu n94 dev1", help="identity seed (serial, ECID, MACs)")
     p.add_argument("--docs", help="also copy devicetree.txt/kexts.txt/iomap.tsv into this directory")
 
@@ -321,6 +351,15 @@ def main():
     p.add_argument("--ptab-only", action="store_true",
                    help="rewrite only the partition table (boot block) of an existing store, keeping its FTL")
     p.set_defaults(fn=cmd_nand)
+    p = sub.add_parser("install", help="build the install boot: it_install, markers.json, the install ramdisk")
+    p.add_argument("dir", help="the prepared firmware directory (rootfs.hfs, ramdisk-restore.dmg)")
+    p.add_argument("--nand", required=True, help="the PPN page store directory (ios_prep.py nand --out)")
+    p.add_argument("--out", required=True, help="where the helper and the install ramdisk go")
+    p.add_argument("--ipsw", help="the IPSW, needed once to decrypt the restore ramdisk")
+    p.add_argument("--keys")
+    p.add_argument("--clang", help="clang to use (default: PATH, then the workspace MSYS2 UCRT64)")
+    p.add_argument("--lld", help="ld.lld to use")
+    p.set_defaults(fn=cmd_install)
     p = sub.add_parser("inventory")
     p.add_argument("dir")
     p.add_argument("--docs")
