@@ -99,13 +99,19 @@ the coprocessor forever (the IOP core model is M3 work with the NAND). What happ
   and writes D1881 register 0x96 <- 0x2b; the PMU model resets the machine and the kernel boots again, about
   every 60 s of wall time (three full cycles in a 200 s run, `runs/n94/m2-serial.log`).
 
-Next: the NAND for the real root and the NVRAM. Decided 2026-10-17 (`hardware.md` "Storage: the decision"): this
-kernelcache has only the PPN FTL (`AppleSwissPPNFTL`), so the raw-NAND path is closed; the plan is a mailbox-level IOP
-model serving PPN opcodes on a PPN page store, with the guest formatting the NAND on a first "install" boot
-(`nand-enable-reformat=1`) and the page store mapping marker sectors onto `rootfs.hfs`. About three weeks; the
-alternatives and their costs are in that section. The Ghidra scripts that produced the evidence are in
-`tools/ghidra` (`DecompileByString`, `DecompileAt`, `DecompileCallees`, `DecompileRange`, `DecompileRefsToRange`,
-`IopFwAnalyze` for the firmware image); the decompiles live in `runs/n94/ghidra/*.log` outside the repository.
+### B1-B2: the PPN NAND (2026-10-17)
+
+```
+python tools/ios-prep/ios_prep.py nand --out ../runs/n94/nand
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --hide arm-io/ae2 --nand ppn     --add-boot-arg nand-enable-reformat=1
+build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=../runs/n94/nand     -serial file:../runs/n94/m2-root.log -display none -monitor stdio -trace 's5l8940_iop*'
+```
+
+The first boot formats the FTL (nine minutes of emulated erases and writes); later boots open it. The
+kernel reaches `FTL_Open [OK]`, the 1953125-sector block device and `IOFlashNVRAM::start: nand nvram
+started successfully`, then waits for partition 1 of that disk (`hardware.md` "Storage: the PPN mailbox").
+Next: B3, the system volume on the FTL's disk (an install boot on the restore ramdisk writing the MBR and
+marker sectors the page store maps onto `rootfs.hfs`), then B4 (effaceable storage and the keybag).
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 

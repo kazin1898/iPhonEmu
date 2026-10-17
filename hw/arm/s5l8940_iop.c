@@ -53,6 +53,7 @@
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
+#include "qemu/timer.h"
 #include "qemu/module.h"
 #include "qemu/error-report.h"
 #include "hw/core/irq.h"
@@ -143,7 +144,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940IOPState, S5L8940_IOP)
 
 typedef struct NandGeometry {
     uint32_t channels, ce_per_channel, caus_per_ce, blocks_per_cau, pages_per_block;
-    uint32_t page_bytes, meta_bytes, boot_page_bytes;
+    uint32_t page_bytes, meta_bytes, boot_page_bytes, lpn_bytes;
     uint32_t cau_bits, block_bits, page_bits;
     uint8_t chip_id[NAND_ID_BYTES];
     uint32_t stride;            /* page_bytes + meta_bytes */
@@ -165,6 +166,7 @@ struct S5L8940IOPState {
     uint32_t ring_rx[IOP_MAX_ENDPOINTS];
     bool said_outside;
     bool is_ppn[NAND_MAX_CHANNELS];
+    QEMUTimer *irq_timer;       /* the answer's interrupt, a round trip after the doorbell */
 
     NandGeometry geo;
     bool have_store;
@@ -309,6 +311,7 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
     g->page_bytes = geometry_get(d, "page_bytes", &err);
     g->meta_bytes = geometry_get(d, "meta_bytes", &err);
     g->boot_page_bytes = geometry_get(d, "boot_page_bytes", &err);
+    g->lpn_bytes = geometry_get(d, "logical_page_bytes", &err);
     g->cau_bits = geometry_get(d, "cau_bits", &err);
     g->block_bits = geometry_get(d, "block_bits", &err);
     g->page_bits = geometry_get(d, "page_bits", &err);
@@ -321,7 +324,8 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
         g->channels < 1 || g->channels > NAND_MAX_CHANNELS || g->ce_per_channel < 1 ||
         g->ce_per_channel > NAND_MAX_CE || g->caus_per_ce > 1u << g->cau_bits ||
         g->blocks_per_cau > 1u << g->block_bits || g->pages_per_block > 1u << g->page_bits ||
-        g->page_bytes + g->meta_bytes > NAND_MAX_PAGE || g->boot_page_bytes > g->page_bytes) {
+        g->page_bytes + g->meta_bytes > NAND_MAX_PAGE || g->boot_page_bytes > g->page_bytes ||
+        !g->lpn_bytes || g->page_bytes % g->lpn_bytes || g->meta_bytes % (g->page_bytes / g->lpn_bytes)) {
         error_setg(errp, "%s: not a PPN page store this model serves", path);
         return;
     }
@@ -343,15 +347,21 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
     s->have_store = true;
 }
 
-/* A row address's page index in its chip's file, or -1. */
+/*
+ * A row address's page index in its chip's file, or -1. The bit above the
+ * CAU field is the SLC-mode flag (the partition scheme's pool partitions are
+ * addressed with it: page | block << page_bits | 1 << (page + block + cau
+ * bits)); an SLC block is the same block with fewer pages.
+ */
 static int64_t nand_page_index(S5L8940IOPState *s, uint32_t row)
 {
     NandGeometry *g = &s->geo;
     uint32_t page = row & ((1u << g->page_bits) - 1);
     uint32_t block = (row >> g->page_bits) & ((1u << g->block_bits) - 1);
     uint32_t cau = (row >> (g->page_bits + g->block_bits)) & ((1u << g->cau_bits) - 1);
+    uint32_t slc = 1u << (g->page_bits + g->block_bits + g->cau_bits);
 
-    if (row >> (g->page_bits + g->block_bits + g->cau_bits) || cau >= g->caus_per_ce ||
+    if ((row & ~(slc - 1) & ~slc) || cau >= g->caus_per_ce ||
         block >= g->blocks_per_cau || page >= g->pages_per_block) {
         return -1;
     }
@@ -410,16 +420,28 @@ static bool nand_program_page(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t 
     return blk_pwrite(blk, idx * s->geo.stride, len, cur, 0) >= 0;
 }
 
-static bool G_GNUC_UNUSED nand_erase_block(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t row)
+static bool nand_erase_block(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t row)
 {
     BlockBackend *blk = nand_chip(s, ch, ce);
     int64_t idx = nand_page_index(s, row & ~((1u << s->geo.page_bits) - 1));
+    int64_t len = (int64_t)s->geo.pages_per_block * s->geo.stride;
+    g_autofree uint8_t *buf = NULL;
+    int64_t i;
 
     if (!blk || idx < 0) {
         return false;
     }
-    return blk_pwrite_zeroes(blk, idx * s->geo.stride, (int64_t)s->geo.pages_per_block * s->geo.stride,
-                             BDRV_REQ_MAY_UNMAP) >= 0;
+    /* An erased block is a hole; zeroing it again would make it real on a host with no unmap. */
+    buf = g_malloc(len);
+    if (blk_pread(blk, idx * s->geo.stride, len, buf, 0) < 0) {
+        return false;
+    }
+    for (i = 0; i < len && !buf[i]; i++) {
+    }
+    if (i == len) {
+        return true;
+    }
+    return blk_pwrite_zeroes(blk, idx * s->geo.stride, len, BDRV_REQ_MAY_UNMAP) >= 0;
 }
 
 /* ---- commands ------------------------------------------------------------- */
@@ -509,7 +531,7 @@ static uint32_t fmi_controller_info(S5L8940IOPState *s, hwaddr cmd)
 {
     NandGeometry *g = &s->geo;
     static const char fw[16] = "iPhonEmu PPN 1.0", pkg[16] = "QEMU-PPN-PKG";
-    static const char uid[16] = "iPhonEmu-uid-000", hwid[8] = "QEMUPPN1", name[10] = "iPhonEmuNAND";
+    static const char uid[16] = "iPhonEmu-uid-000", hwid[8] = "QEMUPPN1", name[10] = "iPhonEmuND";
     uint8_t mfg[16] = { 0 };
     uint32_t params[] = {
         g->caus_per_ce, g->cau_bits, g->blocks_per_cau, g->block_bits, g->pages_per_block,
@@ -554,6 +576,202 @@ static uint32_t fmi_read_cau_bbt(S5L8940IOPState *s, int ch, hwaddr cmd)
     return FMI_STATUS_OK;
 }
 
+/*
+ * The PPN_COMMAND AppleSwissPPNFTL builds and AppleIOPFMI hands over at +0x2c
+ * (+0x30 its length, 0x1c + 12 per page), decoded from the FTL's builder
+ * (s_vfl's page-run adder) and the firmware's erase and read handlers: +0x0
+ * the FTL's command (1 read, 2 program, 3 erase, 4 CAU bad-block table), +0x4
+ * flags, +0x8 u16 pages, +0xa u16 logical pages in all, +0xc u8 the OR of the
+ * page statuses (out), +0xe and +0x14 two chip records {u16 chip enable, u16
+ * pages, u16 first entry}, then one 12-byte entry per page at +0x1c: {u16
+ * bytes (logical pages x (4 KiB + their meta)), u16 column (the first logical
+ * page's offset in those units), u32 row, u8 chip record, u8 logical pages, u8
+ * status (out), u8}. The FTL works in logical pages: the data comes and goes
+ * through the command's segment lists (+0x1c/+0x20 the data list address and
+ * its size in bytes, +0x24/+0x28 the meta list), 8-byte {address, length}
+ * entries, 4 KiB then 16 bytes of meta per logical page in entry order. A page
+ * status is 0x40 done, 0x49 done and clean (erased), 0x10 uncorrectable (sFTL
+ * accepts 0x40, 0x42-0x45, 0x49, 0x51 and 0xc1; anything else is "unidentified").
+ */
+#define PPN_CMD_PAGES       0x8
+#define PPN_CMD_STATUS      0xc
+#define PPN_CMD_CHIP(k)     (0xe + 6 * (k))
+#define PPN_CMD_ENTRY(j)    (0x1c + 12 * (j))
+#define PPN_ENTRY_COL       2
+#define PPN_ENTRY_ROW       4
+#define PPN_ENTRY_CHIP      8
+#define PPN_ENTRY_LPAGES    9
+#define PPN_ENTRY_STATUS    10
+#define PPN_MAX_PAGES       128
+#define PPN_ST_DONE         0x40
+#define PPN_ST_CLEAN        0x09       /* the FTL takes 0x49 as "done, clean" (0x48 is unidentified) */
+#define PPN_ST_ERROR        0x10
+
+typedef struct SegCursor {
+    hwaddr list, end;       /* the {addr, len} entries */
+    hwaddr addr;            /* inside the current segment */
+    uint32_t left;
+} SegCursor;
+
+static void seg_cursor_init(S5L8940IOPState *s, SegCursor *c, hwaddr cmd, int off)
+{
+    c->list = iop_pa(s, iop_ldl(cmd + off));
+    c->end = c->list + iop_ldl(cmd + off + 4);
+    c->addr = 0;
+    c->left = 0;
+}
+
+/* Copy len bytes through the list, to or from buf; short lists leave buf as it is. */
+static void seg_copy(S5L8940IOPState *s, SegCursor *c, uint8_t *buf, uint32_t len, bool to_guest)
+{
+    while (len) {
+        uint32_t n;
+
+        if (!c->left) {
+            if (c->list + 8 > c->end) {
+                return;
+            }
+            c->addr = iop_pa(s, iop_ldl(c->list));
+            c->left = iop_ldl(c->list + 4);
+            c->list += 8;
+            continue;
+        }
+        n = MIN(len, c->left);
+        if (to_guest) {
+            iop_write(c->addr, buf, n);
+        } else {
+            iop_read(c->addr, buf, n);
+        }
+        buf += n;
+        c->addr += n;
+        c->left -= n;
+        len -= n;
+    }
+}
+
+static inline uint8_t iop_ldub(hwaddr addr)
+{
+    return address_space_ldub(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED, NULL);
+}
+
+static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
+{
+    NandGeometry *g = &s->geo;
+    hwaddr pc = iop_pa(s, iop_ldl(cmd + 0x2c));
+    uint32_t n = iop_lduw(pc + PPN_CMD_PAGES);
+    uint32_t chip_ce[2] = { iop_lduw(pc + PPN_CMD_CHIP(0)), iop_lduw(pc + PPN_CMD_CHIP(1)) };
+    uint32_t lpn_bytes = g->lpn_bytes, lpns = g->page_bytes / lpn_bytes, lpn_meta = g->meta_bytes / lpns;
+    g_autofree uint8_t *page = g_malloc(NAND_MAX_PAGE);
+    SegCursor data, meta;
+    uint8_t overall = 0;
+    uint32_t j, k;
+
+    if (!s->have_store || n == 0 || n > PPN_MAX_PAGES) {
+        return FMI_STATUS_INVALID;
+    }
+    seg_cursor_init(s, &data, cmd, 0x1c);
+    seg_cursor_init(s, &meta, cmd, 0x24);
+    for (j = 0; j < n; j++) {
+        hwaddr e = pc + PPN_CMD_ENTRY(j);
+        uint32_t row = iop_ldl(e + PPN_ENTRY_ROW);
+        uint32_t ce = CE_INDEX(chip_ce[iop_ldub(e + PPN_ENTRY_CHIP) & 1]);
+        uint32_t first = iop_lduw(e + PPN_ENTRY_COL) / (lpn_bytes + lpn_meta);
+        uint32_t count = iop_ldub(e + PPN_ENTRY_LPAGES);
+        uint8_t st;
+        bool erased = false;
+
+        if (first + count > lpns) {
+            count = first < lpns ? lpns - first : 0;
+        }
+        switch (op) {
+        case FMI_OP_PPN_READ:
+            if (nand_read_page(s, ch, ce, row, page, &erased)) {
+                for (k = first; k < first + count; k++) {
+                    seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, true);
+                    seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, true);
+                }
+                st = erased ? PPN_ST_DONE | PPN_ST_CLEAN : PPN_ST_DONE;
+            } else {
+                st = PPN_ST_ERROR;
+            }
+            break;
+        case FMI_OP_PPN_WRITE:
+            memset(page, 0xff, g->stride);
+            for (k = first; k < first + count; k++) {
+                seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, false);
+                seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, false);
+            }
+            st = nand_program_page(s, ch, ce, row, page, g->stride) ? PPN_ST_DONE : PPN_ST_ERROR;
+            break;
+        default:
+            st = nand_erase_block(s, ch, ce, row) ? PPN_ST_DONE : PPN_ST_ERROR;
+            break;
+        }
+        TRACE_PRINTF(trace_s5l8940_iop_log, "ppn %s ch%d ce%u row 0x%08x lpn %u+%u -> %02x\n",
+                     op == FMI_OP_PPN_READ ? "read" : op == FMI_OP_PPN_WRITE ? "write" : "erase",
+                     ch, ce, row, first, count, st);
+        address_space_write(&address_space_memory, e + PPN_ENTRY_STATUS, MEMTXATTRS_UNSPECIFIED, &st, 1);
+        overall |= st;
+    }
+    address_space_write(&address_space_memory, pc + PPN_CMD_STATUS, MEMTXATTRS_UNSPECIFIED, &overall, 1);
+    iop_stl(cmd + 0x64, overall);
+    return (overall & PPN_ST_ERROR) ? 0x80000020 : FMI_STATUS_OK;
+}
+
+/*
+ * The single-page opcodes the partition scheme's clients use (IOFlashNVRAM,
+ * AppleEffaceableNAND, AppleNANDFirmware), h2fmi_ppn_iop_{erase,read,write}_single:
+ * +0x18 u16 chip enable, +0x1c the block (opcode 3, shifted by the page bits)
+ * or the row (4, 6), +0x20 the data buffer and +0x24 the meta buffer, both
+ * physical and whole-page. Opcode 5 is the raw read the firmware answers with
+ * 0xff over data and meta.
+ */
+#define FMI_OP_ERASE_SINGLE 3
+#define FMI_OP_READ_SINGLE  4
+#define FMI_OP_READ_RAW     5
+#define FMI_OP_WRITE_SINGLE 6
+
+static uint32_t fmi_single(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
+{
+    NandGeometry *g = &s->geo;
+    uint32_t ce = CE_INDEX(iop_lduw(cmd + CMD_ARG(0)));
+    uint32_t row = iop_ldl(cmd + CMD_ARG(1));
+    hwaddr data = iop_pa(s, iop_ldl(cmd + CMD_ARG(2)));
+    hwaddr meta = iop_pa(s, iop_ldl(cmd + CMD_ARG(3)));
+    g_autofree uint8_t *page = g_malloc(NAND_MAX_PAGE);
+    bool erased = false, ok;
+
+    if (!s->have_store) {
+        return FMI_STATUS_INVALID;
+    }
+    switch (op) {
+    case FMI_OP_ERASE_SINGLE:
+        row <<= g->page_bits;
+        ok = nand_erase_block(s, ch, ce, row);
+        break;
+    case FMI_OP_READ_SINGLE:
+        ok = nand_read_page(s, ch, ce, row, page, &erased);
+        if (ok) {
+            iop_write(data, page, g->page_bytes);
+            iop_write(meta, page + g->page_bytes, g->meta_bytes);
+        }
+        break;
+    case FMI_OP_READ_RAW:
+        memset(page, 0xff, g->stride);
+        iop_write(data, page, g->stride);
+        ok = true;
+        break;
+    default:
+        iop_read(data, page, g->page_bytes);
+        iop_read(meta, page + g->page_bytes, g->meta_bytes);
+        ok = nand_program_page(s, ch, ce, row, page, g->stride);
+        break;
+    }
+    TRACE_PRINTF(trace_s5l8940_iop_log, "ppn single op %u ch%d ce%u row 0x%08x -> %s%s\n", op, ch, ce, row,
+                 ok ? "ok" : "error", erased ? " blank" : "");
+    return !ok ? 0x80000020 : erased ? FMI_STATUS_BLANK : FMI_STATUS_OK;
+}
+
 /* The PPN_COMMAND (AppleSwissPPNFTL's, at +0x2c/+0x30): traced until it is served. */
 static void fmi_trace_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd)
 {
@@ -589,6 +807,12 @@ static void iop_fmi_command(S5L8940IOPState *s, int ch, hwaddr item)
     case FMI_OP_WRITE_BOOTPAGE:
         st = fmi_bootpage(s, ch, item, true);
         break;
+    case FMI_OP_ERASE_SINGLE:
+    case FMI_OP_READ_SINGLE:
+    case FMI_OP_READ_RAW:
+    case FMI_OP_WRITE_SINGLE:
+        st = fmi_single(s, ch, item, op);
+        break;
     case FMI_OP_PPN_CONTROLLER_INFO:
         st = fmi_controller_info(s, item);
         break;
@@ -597,7 +821,7 @@ static void iop_fmi_command(S5L8940IOPState *s, int ch, hwaddr item)
         st = fmi_read_cau_bbt(s, ch, item);
         break;
     case FMI_OP_PPN_FAILURE_INFO: {     /* die info: +0x18 u8 ce, +0x1c die; +0x20 unique ID (16), +0x30 chip ID (8) */
-        char uid[16], cid[8];
+        char uid[20], cid[8];
 
         snprintf(uid, sizeof(uid), "iPhonEmu-d%u-%02x", iop_ldl(item + CMD_ARG(1)) & 0xff,
                  iop_ldl(item + CMD_ARG(0)) & 0xff);
@@ -620,9 +844,7 @@ static void iop_fmi_command(S5L8940IOPState *s, int ch, hwaddr item)
     case FMI_OP_PPN_READ:
     case FMI_OP_PPN_WRITE:
     case FMI_OP_PPN_ERASE:
-        fmi_trace_ppn_command(s, ch, item);
-        qemu_log_mask(LOG_UNIMP, "%s: fmi%d PPN opcode %u\n", __func__, ch, op);
-        st = FMI_STATUS_UNIMPLEMENTED;
+        st = fmi_ppn_command(s, ch, item, op);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: fmi%d opcode %u\n", __func__, ch, op);
@@ -733,8 +955,21 @@ static void iop_doorbell(void *opaque, int n, int level)
     }
     trace_s5l8940_iop_doorbell(served);
     if (served) {
-        s5l8940_aic_sw_set(s->aic, s->ap_vector);
+        /*
+         * Deferred by about a real IOP's round trip, as the A4 HLE does: an answer
+         * raised inside the store that rang the doorbell interrupts the kext
+         * before it has finished posting, and the FTL's format then hung after a
+         * few thousand commands waiting for a completion it had already missed.
+         */
+        timer_mod(s->irq_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 100 * SCALE_US);
     }
+}
+
+static void iop_irq_expire(void *opaque)
+{
+    S5L8940IOPState *s = opaque;
+
+    s5l8940_aic_sw_set(s->aic, s->ap_vector);
 }
 
 /* CTRL = 1: what the firmware's start() does that the AP can see. */
@@ -811,6 +1046,7 @@ static void s5l8940_iop_reset(DeviceState *dev)
     s->running = false;
     s->fw_base = s->fw_config = 0;
     s->said_outside = false;
+    timer_del(s->irq_timer);
 }
 
 static void s5l8940_iop_realize(DeviceState *dev, Error **errp)
@@ -836,6 +1072,7 @@ static void s5l8940_iop_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &s5l8940_iop_ops, s, TYPE_S5L8940_IOP, S5L8940_IOP_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    s->irq_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, iop_irq_expire, s);
 }
 
 static void s5l8940_iop_finalize(Object *obj)
@@ -851,6 +1088,7 @@ static void s5l8940_iop_finalize(Object *obj)
             }
         }
     }
+    timer_free(s->irq_timer);
     g_free(s->nand_dir);
 }
 
@@ -865,6 +1103,7 @@ static const VMStateDescription vmstate_s5l8940_iop = {
         VMSTATE_UINT32(fw_config, S5L8940IOPState),
         VMSTATE_UINT32_ARRAY(ring_rx, S5L8940IOPState, IOP_MAX_ENDPOINTS),
         VMSTATE_BOOL_ARRAY(is_ppn, S5L8940IOPState, NAND_MAX_CHANNELS),
+        VMSTATE_TIMER_PTR(irq_timer, S5L8940IOPState),
         VMSTATE_END_OF_LIST()
     }
 };

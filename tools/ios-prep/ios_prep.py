@@ -149,6 +149,9 @@ def build_kboot(out_dir, args, ip=None):
     boot_args = args.boot_args or kboot.DEFAULT_BOOT_ARGS
     if args.verbose_boot and "-v" not in boot_args.split():
         boot_args += " -v"
+    for extra in args.add_boot_arg or ():
+        if extra not in boot_args.split():
+            boot_args += " " + extra
     image, load_pa, entry, ba_pa, info = kboot.build(kernel, dtb, ident, boot_args=boot_args, iboot=iboot,
                                                       cpus=args.cpus, nand=args.nand, hide=args.hide or (),
                                                       ramdisk=ramdisk_image(out_dir, args, ip))
@@ -266,7 +269,8 @@ def cmd_nand(args):
     path = nand_ppn.write_store(args.out)
     log(f"PPN page store: {path} ({nand_ppn.PPN['channels']}x{nand_ppn.PPN['ce_per_channel']} CEs, "
         f"{nand_ppn.PPN['caus_per_ce']} CAUs x {nand_ppn.PPN['blocks_per_cau']} blocks x "
-        f"{nand_ppn.PPN['pages_per_block']} x {nand_ppn.PPN['page_bytes']} B); the page files are made on first use")
+        f"{nand_ppn.PPN['pages_per_block']} x {nand_ppn.PPN['page_bytes']} B), the partition table in the boot "
+        f"blocks: " + ", ".join(f"{n}:{a}:{b}" for n, t, a, b, fl in nand_ppn.partition_specs()))
 
 
 def cmd_inventory(args):
@@ -282,6 +286,8 @@ def add_kboot_opts(p):
                    help="disk node geometry: raw A4-style NAND for the h2fmi model (default) or PPN")
     p.add_argument("--boot-args", help="kernel boot-args (default: %s)" % kboot.DEFAULT_BOOT_ARGS)
     p.add_argument("--verbose-boot", action="store_true", help="append -v (text console on the panel)")
+    p.add_argument("--add-boot-arg", action="append", metavar="ARG",
+                   help="append one boot-arg (repeatable), e.g. nand-enable-reformat=1 for the FTL's first format")
     p.add_argument("--hide", action="append", metavar="NODE", help="DT node to unmatch (repeatable)")
     p.add_argument("--ramdisk", choices=("restore", "update"),
                    help="stage the IPSW's restore or update ramdisk as the root (rd=md0): launchd with no NAND")

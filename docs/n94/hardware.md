@@ -227,6 +227,41 @@ section of the firmware kext, 0x29000 bytes, imported as ARM:LE:32:v7 at 0 with 
   `max-transaction-size`, `#die-ce`): the chip ID has to agree with what iBoot would have written there, and
   `ios-prep` writes those properties.
 
+## Storage: the PPN mailbox, the partition table and the FTL (B1-B2, 2026-10-17)
+
+What `hw/arm/s5l8940_iop.c` serves and `tools/ios-prep/nand_ppn.py` writes, as found by driving the
+kernel against the model (`runs/n94/m2-root.log`, `-trace 's5l8940_iop*'`):
+
+- **Geometry** (`--nand ppn`, `ios_prep.py nand`): 2 channels x 1 chip, 2 CAUs x 2048 blocks x 128 pages
+  (64 SLC) x 8 KiB + 32 bytes meta (16 per 4 KiB logical page), chip ID `98 3a 94 93 76 5a`, PPN 1.0,
+  `max-transaction-size 64` (the FTL's pages per command; at 0 its page-run loop never adds a page and
+  `s_vfl.c:0xfba`'s read/write loop spins forever). Row = cau << 18 | block << 7 | page; bit 19 is the
+  SLC-mode flag the partition scheme's pool partitions are addressed with.
+- **Commands** (512 bytes, opcode +0, status +8, args from +0x18): 1 set_config (+0x88 is_ppn), 3/4/5/6
+  erase/read/raw/write single (u16 CE, block or row, data buffer, meta buffer), 10/11 write/read bootpage
+  (CE, row, 1536-byte buffer), 13 read CAU BBT (through a PPN_COMMAND, the bitmap through the data list),
+  16/17/18 read/erase/write multi (PPN_COMMAND), 22 controller info (6 feature strings + the device
+  parameters page), 23 die IDs, 24 power state, 25 temperature, 26 debug data. CEs are named FMI1:CE8 style.
+- **PPN_COMMAND** (AppleSwissPPNFTL's, at +0x2c, length 0x1c + 12 per page): +8 u16 pages, +0xa u16 logical
+  pages, +0xc the OR of the statuses, +0xe/+0x14 chip records {CE, pages, first entry}, entries at +0x1c
+  {u16 bytes, u16 column, u32 row, u8 chip record, u8 logical pages, u8 status}; data and meta go through
+  the command's segment lists in logical-page units. Statuses the sFTL accepts: 0x40 done, 0x49 done and
+  clean, 0x42-0x45, 0x51, 0xc1; 0x48 is "unidentified" and panics the FTL open.
+- **The partition table** (boot pages 0 and 1 of block 0 of every chip, `nand_ppn.build_ptab`): header
+  'ndrG', major 1, minor 9; geometry at 0x200; cemetery, spares and substitutions with Fletcher-16 guards;
+  32 entries at 0x400 from the kernel's own PPN format string (boot slice, plog/nvrm/firm pools, the fsys
+  bulk, the info entries); entry names are the integer 'boot' stored little-endian. With it the kernel
+  publishes Boot Block, Effaceable, NVRAM, Firmware, Filesystem, System Config, Diagnostic Data and Bad
+  Block Table.
+- **The first boot** (`--add-boot-arg nand-enable-reformat=1`, no ramdisk): AppleSwissPPNFTL finds no
+  signature and formats (VFL, FPart special blocks 0xC105/0xC104, FTL, signature 0xC101: about 4100
+  erases, 3000 writes), then opens: `FTL_Open [OK]`, a block device of 1953125 sectors of 4 KiB;
+  IOFlashNVRAM wipes and formats the nvrm pool ("nand nvram started successfully"), AppleEffaceableNAND
+  finds no content. The store keeps all of it (sparse XOR-0xff files, 7 MB on disk after the format), so
+  the next boot opens the FTL directly. The kernel then waits for IOMedia partition 1 on that disk: B3.
+- The answer interrupt is deferred 100 us after the doorbell, as the A4 HLE does; erases of blocks that
+  are already holes are skipped (QEMU's win32 file driver has no unmap, so zeroing would allocate).
+
 ## Storage: the decision (2026-10-17)
 
 What the IPSW says, in order of consequence:
