@@ -266,7 +266,7 @@ def cmd_kboot(args):
 
 
 def cmd_nand(args):
-    path = nand_ppn.write_store(args.out)
+    path = nand_ppn.write_store(args.out, ptab_only=args.ptab_only)
     log(f"PPN page store: {path} ({nand_ppn.PPN['channels']}x{nand_ppn.PPN['ce_per_channel']} CEs, "
         f"{nand_ppn.PPN['caus_per_ce']} CAUs x {nand_ppn.PPN['blocks_per_cau']} blocks x "
         f"{nand_ppn.PPN['pages_per_block']} x {nand_ppn.PPN['page_bytes']} B), the partition table in the boot "
@@ -318,6 +318,8 @@ def main():
     p.set_defaults(fn=cmd_kboot)
     p = sub.add_parser("nand", help="write a blank PPN page store (geometry.json) for -M iPhone-4S,nand=DIR")
     p.add_argument("--out", required=True)
+    p.add_argument("--ptab-only", action="store_true",
+                   help="rewrite only the partition table (boot block) of an existing store, keeping its FTL")
     p.set_defaults(fn=cmd_nand)
     p = sub.add_parser("inventory")
     p.add_argument("dir")

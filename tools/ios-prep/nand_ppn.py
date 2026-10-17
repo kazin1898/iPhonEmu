@@ -117,6 +117,35 @@ def partition_specs(g=PPN, firmware_min_capacity=0x180000):
     return specs
 
 
+def pool_map(g, specs):
+    """(spares [(ce, block)], subs [vblock]) for the pool partitions, as the kernel's own "reborn"
+    rewrite of the table lays them out (read back from a boot block it wrote): pool slot s of width w
+    is chip s % chips at per-chip offset offset + s // chips, and its depth blocks j are virtual
+    blocks (offset + s // chips + j) * chips + s % chips; spare i is handed out by the VFL from the
+    top of its banks (chip, CAU), round robin from the last bank, block top - 4 - (i + 1) // banks;
+    the kernel asks for the pool blocks plus 4 extra, mapped to vblock 0."""
+    ces = g["channels"] * g["ce_per_channel"]
+    banks = ces * g["caus_per_ce"]
+    subs = []
+    offset = 0
+    for name, typ, a, b, flags in specs:
+        if typ == ENTRY_SLICE:
+            offset += b
+        elif typ == ENTRY_POOL:
+            for slot in range(a):
+                for j in range(b):
+                    subs.append((offset + slot // ces + j) * ces + slot % ces)
+            offset += a * b // ces
+    subs += [0] * 4         # the extra spares the kernel asks for on a PPN table (versionMajor 1)
+    spares = []
+    for i in range(len(subs)):
+        bank = (banks - 1 + i) % banks
+        ce, cau = bank % ces, bank // ces
+        spares.append((ce, (cau + 1) * g["blocks_per_cau"] - 4 - (i + 1) // banks))
+    assert len(spares) <= 64 and all(v < 256 for v in subs)
+    return spares, subs
+
+
 def build_ptab(g=PPN, generation=1, firmware_min_capacity=0x180000):
     page = bytearray(g["boot_page_bytes"])
     page[0:4] = b"ndrG"
@@ -128,15 +157,27 @@ def build_ptab(g=PPN, generation=1, firmware_min_capacity=0x180000):
     struct.pack_into("<I", cem, 0, 0xdeadcafe)
     struct.pack_into("<H", cem, 42, fletcher16(cem[:42]))
     page[0x224:0x250] = cem
+    specs = partition_specs(g, firmware_min_capacity)
+    # The pool partitions live in spare blocks: 'rAps' lists the spares as {block:24, ce:8} and 'sbus'
+    # maps a pool block's virtual number (its per-chip block number times the chip count, plus the chip,
+    # the chip-interleaved numbering the reference parser recovered) to the spare that holds it. The
+    # spares are the first blocks after the boot block on every chip, inside the VFL's keepout.
+    spares, subs = pool_map(g, specs)
     spare = bytearray(0x10c)
     spare[0:4] = b"rAps"
+    struct.pack_into("<H", spare, 4, len(spares))
+    for i, (ce, block) in enumerate(spares):
+        struct.pack_into("<I", spare, 10 + 4 * i, block | ce << 24)
     struct.pack_into("<H", spare, 0x10a, fletcher16(spare[:0x10a]))
     page[0x250:0x35c] = spare
-    subs = bytearray(0x4c)
-    subs[0:4] = b"sbus"
-    struct.pack_into("<H", subs, 0x4a, fletcher16(subs[:0x4a]))
-    page[0x35c:0x3a8] = subs
-    specs = partition_specs(g, firmware_min_capacity)
+    sub = bytearray(0x4c)
+    sub[0:4] = b"sbus"
+    struct.pack_into("<H", sub, 4, len(subs))
+    sub[6] = 2
+    for i, vblock in enumerate(subs):
+        sub[10 + i] = vblock
+    struct.pack_into("<H", sub, 0x4a, fletcher16(sub[:0x4a]))
+    page[0x35c:0x3a8] = sub
     for i in range(32):
         name, typ, a, b, flags = specs[i] if i < len(specs) else ("none", 0, 0, 1, 0x80000000)
         struct.pack_into("<IIII", page, 0x400 + 16 * i, fourcc(name), a, b, typ | flags)
@@ -175,19 +216,26 @@ def write_page(f, g, cau, block, page, data, meta=None):
     f.write(bytes(b ^ 0xff for b in rec))
 
 
-def write_store(out_dir, g=PPN, firmware_min_capacity=0x180000):
-    """A page store with the partition table in its boot blocks and everything else erased."""
+def write_store(out_dir, g=PPN, firmware_min_capacity=0x180000, ptab_only=False):
+    """A page store with the partition table in its boot blocks and everything else erased; with
+    ptab_only, just the table rewritten into an existing store (its FTL and partitions kept)."""
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "geometry.json"), "w") as f:
-        json.dump(g, f, indent=1)
+    if not ptab_only:
+        with open(os.path.join(out_dir, "geometry.json"), "w") as f:
+            json.dump(g, f, indent=1)
     ptab = build_ptab(g, firmware_min_capacity=firmware_min_capacity)
     stride = g["page_bytes"] + g["meta_bytes"]
     size = g["caus_per_ce"] * g["blocks_per_cau"] * g["pages_per_block"] * stride
     for ch in range(g["channels"]):
         for ce in range(g["ce_per_channel"]):
             path = os.path.join(out_dir, f"ch{ch}-ce{ce}.pages")
-            make_sparse(path, size)
+            if not ptab_only:
+                make_sparse(path, size)
             with open(path, "r+b") as f:
+                erase = b"\x00" * stride
+                for page in range(g["pages_per_block"]):
+                    f.seek(page_index(g, 0, 0, page) * stride)
+                    f.write(erase)
                 for page in range(2):
                     write_page(f, g, 0, 0, page, ptab)
     return os.path.join(out_dir, "geometry.json")
