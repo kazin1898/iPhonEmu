@@ -112,7 +112,7 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
 |---|---|---|---|---|
 | pmgr | 0x3F100000+0x7000; 0x38C00000, 0x38D00000, 0x38E00000, 0x38F00000, 0x3A500000, 0x3A600000 (+0x1000 each) | | `pmgr,s5l8940x` | **A4** `s5l8930_pmgr.c` with `gates` 0x78 (the A5 polls gate 0x44 at 0x1120 and pulses 0x5c; the A4 model's 0x40 gates read as zero there and the kernel spun forever) and `clkcfg-hi` (a second clock-config bank at 0x200-0x300 with the same busy bit). Still unmodeled: 0x38/0x3c, 0x1204, 0x2104/0x2108, 0x3100-0x3108. |
 | dwi | 0x3F700000, AIC 6 | 6 | `dwi,s5l8940x` | **new** (`AppleS5L8940XDWI`): single-wire PMU buck control; the A4's SWI (0xBF600000) plays the same role. |
-| iop | 0x3F300000 | 2 | `iop,s5l8940x` | **A4** `s5l8930_iop.c` + `s5l8930_iop_core.c` run the IOP firmware (`IOP_s5l8940xiop_firmware` in the kernelcache). A4 IOP is 0x86300000 + VICs at 0xBF300000. |
+| iop | 0x3F300000 | 2 | `iop,s5l8940x`, `iop-version 1` | **new**: `AppleA5IOP` + `EmbeddedIOP-47.3` run `IOP_s5l8940xiop_firmware` (EmbeddedIOP iBoot-1537.9.55, 0x29000 bytes, Thumb-2). Not the A4 block: the control registers, the doorbells (AIC `IPID` functions) and the firmware's own use of the AIC are in "The IOP" below. A4 IOP is 0x86300000 + VICs at 0xBF300000. |
 | ae2 | 0x341E0000, 0x341E1000, 0x341A0000, 0x341C1000, 0x34000000+0x30000 | 97, 98 | `ae2,s5l8940x` | **new / hide**: audio engine (`AppleA5AE2`, `IOP_s5l8940xae2_firmware`). |
 | cdma | 0x37000000+0x2D000, 0x37800000+0x9000 (AES) | 51..94 | `cdma-version 3`, `max-channel 44` | **A4** `s5l8930_cdma.c` at the A5 bases (`dram-base`, `uart-base`, `paced-base` properties): channel n interrupts at 50+n; the model's 38 channels leave 39..44 in the unimplemented window. Its AES filter is what `CDMAAES`/`IOAESAccelerator` drive. |
 | sha2 | 0x30200000 | 38 | `sha,s5l8940x` | **new**: SHA-256 (A4 has SHA-1 at 0x80100000, `s5l8930_sha1.c`). |
@@ -124,7 +124,7 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
 | Node | reg | AIC | compatible | Model |
 |---|---|---|---|---|
 | flash-controller0 | FMI0 0x31200000, 0x31240000, 0x31280000; FMI1 0x31300000, 0x31340000, 0x31380000 | 33, 34 | `fmi,s5l8940x|fmi,s5l8920x` | **A4** `s5l8930_h2fmi.c` (0x81200000, VIC 0x22+n) behind the IOP (`AppleIOPFMI`). |
-| flash-controller0/disk | | | `nand` | **PPN**: `ppn-device`, `ppn-features`, `ppn-spec-version`, `ppn-ftl-ver`; `AppleSwissPPNFTL` is in the kernelcache, and so is the raw-NAND `AppleNANDFTL`. `ios-prep --nand raw` (default) writes the A4 raw geometry and `ppn-device 0` so the FTL takes the h2fmi path; whether 6.1.3's FMI firmware accepts a raw device on the A5 is the first storage question. There is no `spi0`/NOR: NVRAM comes as `chosen/nvram-proxy-data` (filled with an empty CHRP image) and `IOFlashNVRAM`. |
+| flash-controller0/disk | | | `nand` | **PPN only**: `ppn-device`, `ppn-features`, `ppn-spec-version`, `ppn-ftl-ver 2`, `boot-from-nand 1`. The kernelcache carries `AppleSwissPPNFTL` (WhimoryPPN: PPNFPart, sVFL, sFTL) and **no raw-NAND FTL** (no `AppleNANDLegacyFTL`, no VSVFL/YaFTL/`NANDDRIVERSIGN` strings anywhere in it), so `ios-prep --nand raw` (the A4 geometry, `ppn-device 0`) can never give the kernel a root: the IOP firmware still has the raw h2fmi path (opcodes 1-12, 20, 21, the A4 model's contract) but nothing above `AppleIOPFMI` would open it. See "Storage: the decision". No `spi0`/NOR: NVRAM comes from `IOFlashNVRAM` on the NAND's `nvrm` partition (the `chosen/nvram-proxy-data` CHRP image only seeds it). |
 | defaults | | | | `use-lwvm`, `content-protect`, `data-journaling`: LwVM partitions on the NAND, as the A4 6.x images. |
 
 The expanded root filesystem is 1,279,774,720 bytes (HFSX, journaled), so an `rd=md0` RAM disk root
@@ -173,6 +173,102 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 `DEVICEINFOBBT` block as ipad1.c does for n90), `chosen` (8 KiB `nvram-proxy-data`, `root-matching`,
 `display-rotation`/`display-scale`, `boot-args` absent: boot_args carries the command line).
 
+## The IOP (`AppleA5IOP`, `EmbeddedIOP-47.3`, `IOP_s5l8940xiop_firmware`)
+
+Decoded 2026-10-17 from the 10B329 kexts (Ghidra, `tools/ghidra/DecompileByString.java` and friends; the
+functions are named in `runs/n94/ghidra/strrefs.json`) and from the firmware image itself (`fwFirmwareImage`
+section of the firmware kext, 0x29000 bytes, imported as ARM:LE:32:v7 at 0 with `IopFwAnalyze.java`).
+
+- **Image**: an iBoot-1537 application like the A4's: ARM vector table at 0 with the handler addresses at
+  0x20 (reset 0x40, undef 0xcb30, swi 0xcb68, pabt 0xcba0, dabt 0xcbdc, irq 0xcaa0, fiq 0xcae8), header words
+  at 0x300 (`main` = 0xa7d, **Thumb**; link base 0; copy size 0x18000; bss 0x131c4-0x14000; stacks
+  0x18800-0x19c00), the `cnfg` block at **0x14000**. The kext publishes `ConfigurationOffset 0x14000`,
+  `HeapBaseOffset 0x1418c`, `HeapSizeOffset 0x14190`, `HeapRequired 0x20000`, `PageTableBase`/`PageTableSize`
+  (new: the kext allocates a page table for the IOP), `MessageChannelSize 8`, `PanicString`, `PanicFunction`,
+  `PanicLog`, `PanicLogBytes(Max)`. The ring table layout is EmbeddedIOP-20+'s (64-byte entries, the A4
+  core's "v3"), which `hw/arm/s5l8930_iop.c`'s ring trace already reads.
+- **Control block** (`AppleA5IOP::startCPU`, text 0x80d17924): the `iop` node's one register window
+  (0x3F300000): `+0x00` <- 0 (stop), `+0x04` <- firmware physical base, `+0x34` <- 0x010001ff
+  (0x030001ff with `iop-version` 1, which this DT has), `+0x00` <- 1 (run); stop writes `+0x00` <- 0. The
+  kext also rounds the image length up to a power of two (>= 0x1000) but never writes it. The A4's cache
+  controls, SELF and FW_SIZE registers are gone.
+- **Doorbells**: the DT gives the node `function-doorbell {aic, 'IPID', 3}` and `function-nmi {aic, 'IPID',
+  0x10002}`: both are AppleInterruptController platform functions, so the AP rings the IOP through the AIC
+  (the kext's `ipid-mask {0xf}` names the four software vectors 0..3 the `SW_SET` word 0 can raise). The
+  IOP answers on AIC vector 2 (`interrupts {2}`).
+- **The firmware on the AIC**: it is a third AIC client. Its IRQ dispatcher (fw 0x2290) and FIQ dispatcher
+  (0x2364) read **IACK at 0x3F202004** (the current-CPU bank, so WHOAMI must be its own number), take
+  `0x1xxxx` as an external vector (`& 0x1ff`, then `MASK_CLR` word `v/32` bit `v%32` after the handler),
+  **`0x70004` as its timer** (writes 1 to 0x3F202020 first, dispatches vector 0xc2) and **`0x70001` as the
+  doorbell** (dispatches vector 0xc1, then writes 2 to 0x3F202020), and panic on `0x4xxxx`. Its timer is the
+  per-CPU timer at 0x3F202010-0x3F20201c (`TIME_LO/HI` at 0x20/0x28 for the tick), as the kernel's; it also
+  reads `GLB_CFG` 0x10. The PMGR it touches: 0x3F101024/28/2c/44, 0x3F1010cc (clock gates), 0x3F101200/1204.
+  CDMA at 0x37001000+ (channel registers); the FMI through a base pointer (no absolute constants).
+- **FMI task** (fw 0x1084, 512-byte commands as the A4, opcode at +0, status at +8, `is_ppn` per bus):
+  raw opcodes 1-12, 20, 21 (the same table as the A4's EmbeddedIOP-20, served by `s5l8930_h2fmi.c` when the
+  core runs), PPN opcodes 2-6, 10, 11, 13, 15-19, 21-26 (`h2fmi_ppn_iop_*`: read/write single/multiple,
+  bootpage, erase, read_cau_bbt, get_controller_info, update_firmware, get_failure_info, set/get feature...).
+  A PPN device's parameter page is validated by `h2fmi_ppn_get_device_params` (fw 0x76e4): caus 1..64,
+  cau_bits 1..7, blocks/cau 0x400..0x2134, block_bits 10..15, pages/block 64..512 (== 1 << page_address_bits),
+  SLC pages/block 64..256, bits/cell 1, page size 0x2020..0x4040, queue sizes 1..50, prep buffer <= 200.
+  `#bootloader-bytes` is 0x600: boot pages are 1536 bytes.
+- **The AP side of PPN**: `AppleIOPFMI-89.3` reads 6-byte chip IDs per FMI:CE from the IOP, publishes
+  `device-readid`, `ce-map`, `channels`, `#bootloader-bytes 0x600`, `dbg-chipids` on the nub and lets
+  `IOFlashStorageDevice::initWithRegistryEntry` (IOFlashStorage-664.13.12) take the geometry from the DT
+  (`#ce`, `#databus`, `toggle-device`, `#page-sectors`, `bbt-format`, `meta-per-logical-page`,
+  `valid-meta-per-logical-page`, `logical-page-size`, `banks-per-ce`, `vendor-type`, `ecc-threshold`,
+  `ecc-correctable`, `ppn-spec-version`, `blocks-cau`, `caus-ce`, `mlc-pages`, `match-oddeven-caus`,
+  `max-transaction-size`, `#die-ce`): the chip ID has to agree with what iBoot would have written there, and
+  `ios-prep` writes those properties.
+
+## Storage: the decision (2026-10-17)
+
+What the IPSW says, in order of consequence:
+
+1. The 10B329 n94 kernelcache has **one FTL, `AppleSwissPPNFTL`** (WhimoryPPN/Core: PPNFPart, SVFL `s_vfl.c`,
+   SFTL `s_*.c` with an L2V tree, WhimoryBoot's signature). There is no raw-NAND FTL at all, so the plan's
+   path (a) - raw NAND through the A4 h2fmi model and a K48NAND-style image - cannot work here however well
+   the IOP firmware's raw path runs. The board is **boot-from-nand** (`chosen/boot-from-nand 1`): the NAND
+   holds `IOFlashPartitionScheme`'s table in its boot blocks, with the PPN format string
+   `slice:boot:1 pool:plog:4:1 pool:nvrm:2:3 flex:firm:2:s:/:firmware-min-capacity bulk:fsys info:scfg
+   info:diag info:fbbt` (boot block, effaceable, NVRAM, firmware, the FTL's bulk, and the info specials), and
+   the kernel refuses to format that table outside a trusted root (`partition table format not allowed in
+   this context`; the restore ramdisk's `restored_external`/`ioflashstoragetool` do it).
+2. `IOFlashNVRAM` formats an erased `nvrm` pool by itself ("starting with freshly wiped NVRAM") and publishes
+   the `IONVRAM` restored waits for; `AppleEffaceableNAND` needs a format from a trusted root, as on the A4
+   (docs/ipad1/ios4.md "The blocker"), and the system keybag needs that.
+3. `AppleSwissPPNFTL` formats an unformatted bulk partition itself when the boot-args carry
+   `nand-enable-reformat=1` (`_DestructiveFormat`: FPart, VFL, FTL, then the signature); without it: "Unformatted
+   media requires nand-enable-reformat boot-arg". Its on-flash format (sVFL contexts, sFTL superblocks, BTOCs,
+   the L2V) is undocumented anywhere public; the fork's A4 generator (LightTouchMac `K48NAND.swift`) only knows
+   VSVFL/YaFTL.
+4. The restore ramdisk (9.9 MB, `ramdisk-restore.dmg`) carries `restored_external`, `asr`, `newfs_hfs`,
+   `mount_hfs`, `fdisk`, `nvram`, `ioflashstoragetool`, `launchd`, MobileKeyBag - and no shell.
+
+Decision taken (pending the user's go-ahead on the cost): **PPN, with the IOP modeled at the mailbox** (the
+A4 HLE's shape, `s5l8930_iop.c`), **and the guest doing its own install** instead of an offline sFTL image:
+
+| Step | What | Reuses | Cost |
+|---|---|---|---|
+| B1 | The IOP as an AIC client (its own WHOAMI, IACK type-7 timer/doorbell events, MASK_CLR, TARGET bit), the 0x3F300000 block, the `IPID` doorbell/NMI, vector 2 back, EmbeddedIOP-47 rings (64-byte entries, `cnfg` at 0x14000) and control messages | `s5l8930_iop.c`, `s5l8940_aic.c` | 2-3 days |
+| B2 | The PPN FMI opcodes on a PPN page store (CAU/block/page geometry from the DT, parameter page, controller info, CAU BBT, 1536-byte boot pages, read/program/erase multi with PPN status arrays) | the raw opcode handlers as a template; the firmware's `h2fmi_ppn_iop_*` and the kext's `generatePpnDmaLists` give the structs | 5-8 days |
+| B3 | First boot as an install: boot-args `nand-enable-reformat=1`, a NAND partition table in the boot blocks (write it from `ios-prep` - `nand_part_core`'s reader is decompiled - or let `ioflashstoragetool` do it), the FTL formats the bulk, then the system volume: a guest helper writes the MBR plus *marker* sectors (magic + LBA) over `/dev/rdisk0` and the page store serves every marker page from the host's `rootfs.hfs`/data image, so no sFTL knowledge is needed; the helper is a hand-made static armv7 Mach-O (raw syscalls, no toolchain) launched by the ramdisk's launchd | `s5l8930_iop.c`'s store, `tools/ios-prep` | 4-6 days |
+| B4 | Effaceable format + system keybag (needed for SpringBoard, not for launchd): the A4 precedent is a restore-ramdisk one-shot; here it needs either an iOS toolchain for a helper that calls the user clients, or a Python restore host (usbmux + restored + asr over `docs/tcp-usb-protocol.md`) | ipad1's one-shot | 3-5 days, after M2 |
+
+About three weeks to the M2 definition (real root from the NAND, IONVRAM, launchd and daemons, no reboot loop).
+Alternatives, costed:
+
+- **A. The IOP core running the real firmware** (the plan's preferred shape) plus a model of the A5 FMI's
+  **sequencer** (`fmiss_ppn.c`: SEQ_MACRO_CONTROL, COMMAND/OPERAND/STORE FIFOs, SEQ_INT_PND) and the PPN wire
+  protocol under it: B1 as a real AIC port + 2-3 more weeks for the sequencer and PPN hardware, same B3/B4.
+  Authentic (and the ae2 would follow), but the sequencer is undocumented and only the firmware describes it.
+- **C. A RAM-disk root** (`rd=md0`) with a trimmed 6.1.3 root (<= ~450 MB, fonts/dictionaries/carrier bundles
+  out) on a 1 GiB machine: 2-3 days to launchd and daemons from the real files, but no NAND, no persistence,
+  IONVRAM still missing; a demo, not M2.
+- **D. A donor kernelcache** (iPad2,1 10B329, the same S5L8940X kernel) if it carries `AppleNANDLegacyFTL`:
+  would reopen path (a) with the proven A4 generator, at the price of a kernelcache not built for this board
+  (PMU, panel, touch and baseband kexts differ); an hour to check, outcome uncertain.
+
 ## Open points for the machine model
 
 1. ~~AIC register map~~: confirmed against the kext (section above). Still open in the model: which GLB_CFG
@@ -200,7 +296,7 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
    **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
    `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
-6. **Storage** (M2: the kernel sits at `Still waiting for root device`): raw NAND through the IOP's FMI
+6. **Storage**: decided 2026-10-17 ("Storage: the decision"): PPN through a mailbox-level IOP model, the guest formatting the NAND itself; waiting on the user's go-ahead for the ~3-week path or one of the shortcuts.
    firmware vs a PPN model.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.

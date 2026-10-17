@@ -99,8 +99,13 @@ the coprocessor forever (the IOP core model is M3 work with the NAND). What happ
   and writes D1881 register 0x96 <- 0x2b; the PMU model resets the machine and the kernel boots again, about
   every 60 s of wall time (three full cycles in a 200 s run, `runs/n94/m2-serial.log`).
 
-Next: the NAND for the real root and the NVRAM (IOP core running `s5l8940xiop` + FMI, or a PPN model, plus
-an FTL image generator); then the D1881's ADC channels and wake events when something depends on them.
+Next: the NAND for the real root and the NVRAM. Decided 2026-10-17 (`hardware.md` "Storage: the decision"): this
+kernelcache has only the PPN FTL (`AppleSwissPPNFTL`), so the raw-NAND path is closed; the plan is a mailbox-level IOP
+model serving PPN opcodes on a PPN page store, with the guest formatting the NAND on a first "install" boot
+(`nand-enable-reformat=1`) and the page store mapping marker sectors onto `rootfs.hfs`. About three weeks; the
+alternatives and their costs are in that section. The Ghidra scripts that produced the evidence are in
+`tools/ghidra` (`DecompileByString`, `DecompileAt`, `DecompileCallees`, `DecompileRange`, `DecompileRefsToRange`,
+`IopFwAnalyze` for the firmware image); the decompiles live in `runs/n94/ghidra/*.log` outside the repository.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 
