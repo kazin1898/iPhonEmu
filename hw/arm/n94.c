@@ -30,6 +30,9 @@
 #include "hw/arm/exynos4210.h"
 #include "hw/arm/s5l8930.h"
 #include "hw/arm/s5l8940.h"
+#include "hw/arm/ipod_touch_cs42l58.h"
+#include "hw/arm/ipod_touch_lis302dl.h"
+#include "hw/i2c/i2c.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/arm/cpu.h"
@@ -192,6 +195,8 @@ static void n94_init(MachineState *machine)
     s->pmgr = dev;
     sbd = SYS_BUS_DEVICE(dev);
     qdev_prop_set_uint8(dev, "board-id", 0x08);     /* N94AP */
+    qdev_prop_set_uint32(dev, "gates", 0x78);       /* the kernel polls gate 0x44 and pulses 0x5c */
+    qdev_prop_set_bit(dev, "clkcfg-hi", true);      /* clock configs at 0x200-0x300 too */
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_PMGR_BASE);
 
@@ -203,6 +208,70 @@ static void n94_init(MachineState *machine)
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_GPIO_BASE);
     sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_GPIO));
+
+    /*
+     * CDMA with its AES filter: the A4 model at the A5's addresses (same layout,
+     * 44 channels where the A4 has 38; the last six fall into the unimplemented
+     * window). bsd_init's IOSecureBSDRoot waits until a kext asks the platform
+     * "SecureRoot", and the asker is the AES accelerator this block provides.
+     */
+    dev = qdev_new(TYPE_S5L8930_CDMA);
+    qdev_prop_set_uint64(dev, "dram-base", S5L8940_DRAM_BASE);
+    qdev_prop_set_uint64(dev, "dram-size", S5L8940_DRAM_SIZE);
+    qdev_prop_set_uint32(dev, "uart-base", S5L8940_UART_BASE(0));
+    qdev_prop_set_uint32(dev, "paced-base", S5L8940_I2S_BASE(0));
+    qdev_prop_set_uint32(dev, "paced-ports", 4);
+    qdev_prop_set_uint8(dev, "version", 3);         /* DT cdma-version */
+    sbd = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, S5L8940_CDMA_BASE);
+    sysbus_mmio_map(sbd, 1, S5L8940_AES_BASE);
+    for (i = 1; i < S5L8930_CDMA_CHANNELS; i++) {
+        sysbus_connect_irq(sbd, i, n94_irq(s, S5L8940_IRQ_CDMA(i)));
+    }
+
+    /*
+     * I2C controllers (i2c,s5l8940x; hw/arm/s5l8940_i2c.c) and the DT's slaves.
+     * The PMU driver's first read of the D1881 at 0x74 timing out on an
+     * unimplemented block was a kernel panic, and with the bus there but
+     * empty it retried the read forever. The other parts reuse the A4 boards'
+     * models for the same chips (the codec driver never checks its ID).
+     */
+    {
+        static const struct {
+            uint8_t bus, addr;
+            const char *type;
+        } slaves[] = {
+            { 0, 0x74, TYPE_S5L8940_D1881 },     /* pmu,d1881 */
+            { 0, 0x4a, TYPE_CS42L58 },            /* audio-control,cs42l63: a MAP register file */
+            { 1, 0x49, TYPE_S5L8930_TSL2581 },    /* als,tsl2581 */
+            { 1, 0x0d, TYPE_S5L8930_AK8975 },     /* compass,akm8975b */
+            { 2, 0x19, TYPE_LIS302DL },           /* accelerometer,lis331dlh */
+            { 2, 0x6a, TYPE_S5L8930_L3G4200D },   /* gyro,ap3gdl */
+        };
+        I2CBus *bus[3];
+
+        for (i = 0; i < 3; i++) {
+            dev = qdev_new(TYPE_S5L8940_I2C);
+            sbd = SYS_BUS_DEVICE(dev);
+            sysbus_realize_and_unref(sbd, &error_fatal);
+            sysbus_mmio_map(sbd, 0, S5L8940_I2C_BASE(i));
+            sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_I2C(i)));
+            bus[i] = I2C_BUS(qdev_get_child_bus(dev, "i2c"));
+        }
+        for (i = 0; i < ARRAY_SIZE(slaves); i++) {
+            I2CSlave *slave = i2c_slave_new(slaves[i].type, slaves[i].addr);
+
+            if (!strcmp(slaves[i].type, TYPE_LIS302DL)) {
+                qdev_prop_set_uint8(DEVICE(slave), "whoami", 0x32);   /* LIS331DLH */
+                qdev_prop_set_string(DEVICE(slave), "mount", "-2,1,3");
+            }
+            if (!strcmp(slaves[i].type, TYPE_S5L8930_L3G4200D)) {
+                qdev_prop_set_string(DEVICE(slave), "mount", "1,2,3");
+            }
+            i2c_slave_realize_and_unref(slave, bus[slaves[i].bus], &error_fatal);
+        }
+    }
 
     /* Samsung UARTs: uart0 is the kernel's console (-serial), uart1 its debug port. */
     for (i = 0; i < 2; i++) {

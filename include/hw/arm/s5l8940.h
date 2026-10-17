@@ -31,11 +31,17 @@
 #define S5L8940_GPIO_SIZE        0x1000
 #define S5L8940_GPIO_PORTS       0x1c
 #define S5L8940_GPIO_INT_GROUPS  8
+#define S5L8940_CDMA_BASE        0x37000000   /* cdma-version 3, max-channel 44; the A4 block's layout */
+#define S5L8940_AES_BASE         0x37800000   /* its AES filter contexts */
+#define S5L8940_I2S_BASE(n)      (0x34190000 + (n) * 0x1000)
+#define S5L8940_I2C_BASE(n)      (0x33200000 + (n) * 0x100000)   /* i2c0 PMU/codec, i2c1 compass/ALS, i2c2 accel/gyro */
 
 /* AIC vector numbers (DT interrupts) */
 #define S5L8940_IRQ_WDT          4
 #define S5L8940_IRQ_UART(n)      (21 + (n))
 #define S5L8940_IRQ_GPIO         119
+#define S5L8940_IRQ_CDMA(ch)     (50 + (ch))  /* DT cdma interrupts: channels 1..44 at 51..94 */
+#define S5L8940_IRQ_I2C(n)       (18 + (n))
 #define S5L8940_AIC_NUM_IRQS     192          /* AIC_INFO[9:0]; the IPI vectors follow at 0xc0.. */
 
 /*
@@ -46,6 +52,11 @@
  * S5L8940_AIC_MAX_CPUS whatever num-cpus says.
  */
 #define TYPE_S5L8940_AIC "s5l8940.aic"
+
+/* I2C controller (hw/arm/s5l8940_i2c.c): MMIO 0 (0x1000), sysbus IRQ 0, child bus "i2c". */
+#define TYPE_S5L8940_I2C "s5l8940.i2c"
+/* Dialog D1881 PMU on i2c0 at 0x74 (hw/arm/s5l8940_d1881.c): a register file for now. */
+#define TYPE_S5L8940_D1881 "s5l8940.d1881"
 #define S5L8940_AIC_MAX_CPUS     4
 #define S5L8940_AIC_IRQ(c)       (c)
 #define S5L8940_AIC_FIQ(c)       (S5L8940_AIC_MAX_CPUS + (c))
