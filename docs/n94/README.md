@@ -10,7 +10,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | | What | Proof | State |
 |---|---|---|---|
 | M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
-| M2 | `launchd` and its daemons | serial log | pending |
+| M2 | `launchd` and its daemons | `runs/n94/m2-serial.log` | **done** 2026-10-17 on the IPSW's restore ramdisk (`rd=md0`): launchd, restored_external; the NAND root is still open |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | screenshot | pending |
 | M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
 
@@ -46,6 +46,13 @@ boards get (identity, flags, clocks, NVRAM proxy image, memory map, sgx unmatche
 - `--cpus 1` (default for bring-up): `cpus/cpu1` is unmatched (`device_type off`, name `xcpu`).
 - `--nand raw` (default): the A4 raw-NAND geometry and `ppn-device 0`; `--nand ppn` keeps PPN.
 - `--hide NODE` unmatches any further node; `--verbose-boot` appends `-v`.
+- `--ramdisk restore|update` (with `--ipsw` once, to decrypt it) stages the IPSW's ramdisk after boot_args,
+  under topOfKernelData, publishes it as `chosen/memory-map/RAMDisk` and adds `rd=md0`: the kernel's md
+  driver makes it the root, as iBoot does for a restore. That is how M2 was reached without a NAND model.
+- `--cpus 1` also puts `cpus=1` in the boot-args: AppleARMPE counts every child of `/cpus` (the hidden
+  cpu1 included) for the CPU interrupt controller and only that boot-arg lowers the count; with 2 expected,
+  `AppleInterruptController::start` blocks in `IOCPUInterruptController::registerInterrupt` forever and no
+  device interrupt is ever unmasked.
 
 ## Booting
 
@@ -62,6 +69,32 @@ qemu log is flushed, quit through the monitor instead of killing the process:
 `(sleep 150; echo quit) | build/qemu-system-arm ... -serial file:../runs/n94/m1-serial.log -monitor stdio`
 (`runs/n94/run-m1.sh`, outside the repository, does this). Note that `-trace file=` also receives the
 `-d` log output.
+
+### M2: launchd from the restore ramdisk (2026-10-17, `runs/n94/m2-serial.log`)
+
+```
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --ramdisk restore \
+    --ipsw ../firmware/iPhone4,1_6.1.3_10B329_Restore.ipsw --hide arm-io/iop --hide arm-io/ae2
+build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin -serial stdio -display none
+```
+
+The two IOP nodes are hidden because `AppleA5IOP` and `A5AE2` load their EmbeddedIOP firmware and wait for
+the coprocessor forever (the IOP core model is M3 work with the NAND). What happens, in order:
+
+- `AppleInterruptController` registers (it needs `cpus=1`, above), so drivers get their interrupts: the
+  watchdog, the serial ports, the light sensor, DWI, the CDMA with its AES filter.
+- `CDMAAES` starts the `IOAESAccelerator`, which asks the platform for `SecureRoot`; AppleARMPE answers once
+  bsd_init has named the root (`secure-root-prefix` is `md`, so `md0` is secure) and that handshake is what
+  releases `IOSecureBSDRoot` in bsd_init. Without the CDMA the kernel sat forever after `BSD root: md0`.
+- The PMU driver finds the D1881 register file on i2c0 (no values yet: `_readADCGated ADC read bad state`),
+  the compass and accelerometer start, the gyro fails its calibration check; `BSD root: md0`.
+- `launchd[1] has started up`; `restored_external` runs, finds no display service and no USB host
+  (`enable_usb_connections failed`), exits and asks for a reboot; the reboot path starts the USB stack and
+  `AppleUSBEHCI::UIMInitialize` panics on the unimplemented EHCI at 0x36400000 (`could not get chip to halt`).
+
+Next: the USB device/host models (the A4's Synopsys OTG and EHCI at the A5 addresses) so restored can talk
+to a host or the reboot completes, then the NAND (IOP core + FMI or a PPN model) for the real root, and the
+D1881's registers (ADC, RTC, buttons) so the PMU driver stops complaining.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 
