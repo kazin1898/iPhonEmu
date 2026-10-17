@@ -305,18 +305,65 @@ IPSW's own restore ramdisk as the trusted root and the emulator's helper where `
   wall time), then the MBR (two `0xAF` entries: system at LBA 1, data to the end), closes the disk so
   `IOFDiskPartitionScheme` publishes `disk0s1`/`disk0s2`, runs the ramdisk's `newfs_hfs -s -v Data`,
   `fsck_hfs -fy` and `mount_hfs` on the data partition, creates the directories iOS expects under
-  `/private/var` and writes launchd's overrides database (`db/launchd.db/com.apple.launchd/overrides.plist`,
-  what `launchctl unload -w` writes) with `com.apple.mobile.keybagd` disabled, syncs and
-  `reboot(RB_HALT | RB_QUICK)`. Every step is idempotent; a second run finds the MBR and only revisits the
+  `/private/var`, execs `it_keybag` (B4, below), writes launchd's overrides database
+  (`db/launchd.db/com.apple.launchd/overrides.plist`, what `launchctl unload -w` writes) with the Bluetooth
+  jobs disabled (and keybagd, only if `it_keybag` failed), syncs and `reboot(RB_HALT | RB_QUICK)`. Every step is idempotent; a second run finds the MBR and only revisits the
   data volume.
-- **Why keybagd is held off**: with no system keybag (`/private/var/keybags/systembag.kb`, which needs
-  formatted effaceable storage and MobileKeyBag: B4) `keybagd`'s `kb_load` fails, it prints `FATAL KEYBAG
-  ERROR: kb_load`, sets `auto-boot=false` and reboots into recovery 20 s after launchd starts. The knob
-  lives on the emulator's data volume; the system volume stays as Apple shipped it.
+- **Why keybagd was held off** (until B4, below): with no system keybag (`/private/var/keybags/systembag.kb`,
+  which needs formatted effaceable storage and MobileKeyBag) `keybagd`'s `kb_load` fails, it prints `FATAL
+  KEYBAG ERROR: kb_load`, sets `auto-boot=false` and reboots into recovery 20 s after launchd starts. The
+  knob lives on the emulator's data volume; the system volume stays as Apple shipped it.
 - **The halt**: `reboot(RB_HALT)` runs the kernel's shutdown (`AppleNANDFTL::systemWillShutdown`, the FTL
   flushed) and `pmu go stdby`, after which the kernel panics (`panic(cpu 0 caller 0x80017d65)`): the D1881
   model has no standby state. Harmless for the install boot (the run script quits on `it_install: done`);
   the model should power the machine off there.
+
+## Storage: effaceable storage and the system keybag (B4, 2026-10-17)
+
+What SpringBoard needs and launchd does not: formatted effaceable storage (the NAND's `plog` pool,
+`AppleEffaceableNAND`) and the system keybag (`/private/var/keybags/systembag.kb`, whose class keys
+securityd, lockdownd and SpringBoard unwrap through AppleKeyStore). Both are made by `restored_external`
+on a real restore and both are refused outside a trusted root (`format attempt from untrusted root`; the
+restore ramdisk is one, `secure-root-prefix` 'md'), so they are a step of the install boot:
+
+- **The model needed nothing new.** `[effaceable:ERR] unable to find content` on every boot was the
+  unformatted state, not a missing page. The format erased the pool's SLC blocks through the single-page
+  erase (opcode 3, rows `0xbfe00`/`0xffe00`/`0xffd80` on both chips: the plog pool lives in the spare
+  blocks at the end of CAU 1, SLC flag set), wrote its content and the kernel printed `[effaceable:INIT]
+  formatting storage`, `succeeded`, `format succeeded`; every boot since reads it back as `found current
+  generation, 2, in group 1` (single-page reads of the same rows, the blank pages answered 0xffffffff).
+- **The helper, and how it is linked.** `contrib/it-install/it_keybag.c` makes the two calls the fork's
+  `contrib/it-keybag` makes on the A4 boards: `AppleEffaceableStorage` user client selector 3
+  (isFormatted) and 4 (format), then `MKBKeyBagCreateSystem(NULL, "/mnt2")` with the data volume mounted
+  at `/mnt2`. Two ways were open for a helper with no iOS SDK on the host: (a) raw MIG to IOKit
+  (`io_service_get_matching_service`, `io_service_open_extended`, `io_connect_method`) plus everything
+  `MKBKeyBagCreateSystem` does on top of AppleKeyStore (the bag's creation, its wrapping, the effaceable
+  locker, the file's format), which would have meant re-implementing MobileKeyBag from its disassembly;
+  (b) a dyld-linked helper that calls the ramdisk's own IOKit and MobileKeyBag. (b) was chosen and cost
+  one build change: `guest_install.py` compiles `it_keybag.c` with the same bare-metal clang as
+  `it_install.c`, links it with a data segment on the page after the code (`.data.binds`: the three
+  `dlopen`/`dlsym`/`dlerror` pointer slots) and writes a Mach-O with `__TEXT`, `__DATA`, `__LINKEDIT`,
+  `LC_DYLD_INFO_ONLY` whose bind opcodes make dyld fill the slots from `/usr/lib/libSystem.B.dylib`,
+  `LC_LOAD_DYLINKER /usr/lib/dyld`, `LC_LOAD_DYLIB`, an empty `LC_SYMTAB`/`LC_DYSYMTAB` and
+  `LC_UNIXTHREAD` (dyld-212.3.2 jumps to that entry with the kernel's stack once libSystem is initialized;
+  not PIE, so the bare-metal code's absolute addresses hold). The rest of the helper is the same no-libc
+  style as `it_install` (raw syscalls, `mach_task_self` as trap -28). No code signature and no
+  entitlements: the IPSW's own `restored_external` carries none either (its signature has no entitlements
+  blob; keybagd's `com.apple.keystore.device` is for the normal boot), and the kernel grants the system
+  bag from the secure root: `booted from secure root: give device keybag access to everyone`.
+- **Where it sits.** `hfs.py` only replaces an existing file's data fork, so the helper takes the ramdisk's
+  `/usr/bin/TiSerialFlasher` (the touch-controller flasher, of no use in the emulator); `it_install` execs
+  it after the data volume is mounted and populated, with the child's stdout/stderr on the console (so
+  dyld's own complaints would show), and writes launchd's overrides afterwards: keybagd is disabled only
+  when the helper fails. A second install boot finds the storage formatted and the keybag present
+  (`MKBKeyBagCreateSystem` refuses to replace one: -4, `already exists`) and leaves both.
+- **The console descriptor.** The helper's first build printed only its hello line: the `/dev/console`
+  descriptor opened before `dlopen` no longer reached the console once the frameworks were loaded (the
+  program's exit status was still 0). The helper now opens the console for every message.
+- **The run** (`runs/n94/m2-install.log`): `it_keybag: hello (dyld), console fd 5`, `effaceable open 0x0
+  isFormatted 0x0 -> 0`, `format 0x0`, `isFormatted -> 1`, `MKBKeyBagCreateSystem -> 0,
+  /mnt2/keybags/systembag.kb 1495 bytes`, 8 s from power-on to `it_install: done` on a store that already
+  has the system volume.
 
 ## Storage: the decision (2026-10-17)
 
@@ -351,7 +398,7 @@ A4 HLE's shape, `s5l8930_iop.c`), **and the guest doing its own install** instea
 | B1 | The IOP as an AIC client (its own WHOAMI, IACK type-7 timer/doorbell events, MASK_CLR, TARGET bit), the 0x3F300000 block, the `IPID` doorbell/NMI, vector 2 back, EmbeddedIOP-47 rings (64-byte entries, `cnfg` at 0x14000) and control messages | `s5l8930_iop.c`, `s5l8940_aic.c` | 2-3 days |
 | B2 | The PPN FMI opcodes on a PPN page store (CAU/block/page geometry from the DT, parameter page, controller info, CAU BBT, 1536-byte boot pages, read/program/erase multi with PPN status arrays) | the raw opcode handlers as a template; the firmware's `h2fmi_ppn_iop_*` and the kext's `generatePpnDmaLists` give the structs | 5-8 days |
 | B3 | **done 2026-10-17** ("Storage: the install boot" above): the partition table from `ios-prep`, the FTL's own format on the first boot, then the system volume as marker pages written by `contrib/it-install` from the restore ramdisk and served from `rootfs.hfs` by the page store; `BSD root: disk0s1`, launchd and the daemons from the NAND | `s5l8930_iop.c`'s store, `tools/ios-prep` | 4-6 days |
-| B4 | Effaceable format + system keybag (needed for SpringBoard, not for launchd): the A4 precedent is a restore-ramdisk one-shot; here it needs either an iOS toolchain for a helper that calls the user clients, or a Python restore host (usbmux + restored + asr over `docs/tcp-usb-protocol.md`) | ipad1's one-shot | 3-5 days, after M2 |
+| B4 | **done 2026-10-17** ("Storage: effaceable storage and the system keybag" above): the effaceable format and the system keybag from the install boot, by a dyld-linked helper calling the ramdisk's IOKit and MobileKeyBag (no iOS toolchain needed); keybagd back on | ipad1's one-shot, `contrib/it-keybag` | 3-5 days, after M2 |
 
 About three weeks to the M2 definition (real root from the NAND, IONVRAM, launchd and daemons, no reboot loop).
 Alternatives, costed:
@@ -396,7 +443,7 @@ Alternatives, costed:
 5. ~~I2C~~: decoded and modeled (section above).
 6. **Storage**: decided by the user on 2026-10-17 ("Storage: the decision", option B) and done through B3
    the same day: PPN through a mailbox-level IOP model and a PPN page store, the guest formatting the NAND
-   and installing the system volume on its first boot. Open: B4 (effaceable storage and the system keybag,
-   so keybagd can run), the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
+   and installing the system volume on its first boot, and B4 (effaceable storage and the system keybag,
+   keybagd running) the same day. Open: the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.

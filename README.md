@@ -13,7 +13,7 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-39.6%25-orange) ![milestones](https://img.shields.io/badge/milestones-2%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-17-lightgrey)
+![overall](https://img.shields.io/badge/overall-41.3%25-orange) ![milestones](https://img.shields.io/badge/milestones-2%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-17-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
@@ -24,9 +24,9 @@ goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_ma
 |---|---|---|
 | System: Toolchain and Windows build | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | System: Firmware preparation (ios-prep) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
-| System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | 80% |
-| System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 85% |
-| System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |
+| System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 88% |
+| System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | 90% |
+| System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟩🟩🟨⬜⬜ | 75% |
 | Processor and platform: Cortex-A9 core, TCG | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | 70% |
 | Processor and platform: Apple AIC and timers | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | 80% |
 | Processor and platform: PMGR clocks, GPIO, DWI, watchdog, PL310 | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |

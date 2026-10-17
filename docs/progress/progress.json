@@ -15,25 +15,25 @@
           "name": "Firmware preparation (ios-prep)",
           "percent": 95,
           "weight": 3,
-          "note": "IPSW to kboot, rootfs, PPN NAND store, the install boot's helper and ramdisk; boot logo pending"
+          "note": "IPSW to kboot, rootfs, PPN NAND store, the install boot's two helpers (static and dyld-linked) and ramdisk; boot logo pending"
         },
         {
           "name": "Boot to launchd (userland)",
-          "percent": 80,
+          "percent": 88,
           "weight": 5,
-          "note": "M2: BSD root disk0s1 from the NAND, launchd and the daemons; SpringBoard needs the keybag (B4)"
+          "note": "M2: BSD root disk0s1 from the NAND, launchd and the daemons; keybagd runs with the system keybag (B4); SpringBoard needs the panel (M3)"
         },
         {
           "name": "Storage: IOP, PPN NAND, FTL, NVRAM",
-          "percent": 85,
+          "percent": 90,
           "weight": 6,
-          "note": "FTL formats and opens, IONVRAM up, system volume installed as marker pages (B3); effaceable + keybag (B4) open"
+          "note": "FTL formats and opens, IONVRAM up, system volume as marker pages (B3), effaceable storage formatted (B4); FTL speed and wear open"
         },
         {
           "name": "Persistence (data volume, NVRAM across boots)",
-          "percent": 55,
+          "percent": 75,
           "weight": 2,
-          "note": "data volume made by the install boot, NVRAM generations and FTL state survive boots; keybag and sealing open"
+          "note": "data volume, NVRAM generations, FTL state, effaceable lockers and the system keybag survive boots; sealing open"
         }
       ]
     },

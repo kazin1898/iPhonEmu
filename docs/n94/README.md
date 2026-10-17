@@ -10,7 +10,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | | What | Proof | State |
 |---|---|---|---|
 | M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
-| M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot (keybagd and the Bluetooth jobs held off until B4; see "B3") |
+| M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot; B4 the same day: effaceable storage formatted and the system keybag created by the install boot, keybagd running (see "B4") |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | screenshot | pending |
 | M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
 
@@ -133,7 +133,7 @@ build/qemu-system-arm -M iPhone-4S,kboot=../runs/n94/install/kboot.bin,nand=../r
 ```
 
 `install` needs clang and ld.lld (the MSYS2 UCRT64 ones are found by themselves; `--clang`/`--lld`
-otherwise). On a blank store the kernel formats the FTL first (`nand-enable-reformat=1`, nine minutes);
+otherwise) and builds both helpers, `it_install` and `it_keybag` (B4, below). On a blank store the kernel formats the FTL first (`nand-enable-reformat=1`, nine minutes);
 then launchd runs the helper: `it_install: hello`, the 312,445 markers (40 s), `MBR written`, `newfs_hfs`,
 `mount_hfs`, `launchd overrides`, `it_install: done`, and the halt (`runs/n94/run-install.sh`, outside
 the repository, quits QEMU on that line; the kernel's own halt ends in a panic after `pmu go stdby`, the
@@ -160,17 +160,63 @@ What happens (`runs/n94/m2-root.log`, `runs/n94/run-m2.sh`):
   CommCenter, sandboxd, mediaserverd, lockdownd, wifid, ptpd, iapd, apsd, mobileassetd, securityd,
   SpringBoard's prerequisites; FIPS user-space POST passes. Wi-Fi and the baseband time out on their HSIC
   ports as before, Bluetooth and keybagd are not started (below).
-- Two jobs are disabled through launchd's overrides database on the data volume, written by the install
-  helper (the system volume is untouched): `com.apple.mobile.keybagd`, which without a system keybag (B4)
-  prints `FATAL KEYBAG ERROR: kb_load` and reboots into recovery 20 s after launchd, and
-  `com.apple.BTServer`/`com.apple.BlueTool`, as the fork keeps them off on the A4 boards: with nothing
+- Two jobs were disabled through launchd's overrides database on the data volume, written by the install
+  helper (the system volume is untouched): `com.apple.mobile.keybagd`, which without a system keybag
+  prints `FATAL KEYBAG ERROR: kb_load` and reboots into recovery 20 s after launchd (back on since B4,
+  below), and `com.apple.BTServer`/`com.apple.BlueTool`, as the fork keeps them off on the A4 boards: with nothing
   behind uart3, BlueTool's HCI traffic through AppleOnboardSerial's rx DMA path ended in a kernel assertion
   (`AppleSimpleUARTSync.cpp:2177`) when uart3 and uart5 were still in the unimplemented window; the
   machine now has the device tree's four UARTs (0, 1, 3, 5).
 - The run of 7 minutes ends with launchd and its daemons alive and no reboot: M2.
 
-Next: B4 (effaceable storage and the system keybag, so keybagd and data protection work: the keybag is
-what SpringBoard needs), the PMU standby on halt, the data volume's journal, then M3 (the panel).
+### B4: effaceable storage and the system keybag (2026-10-17)
+
+What SpringBoard needs beyond launchd: formatted effaceable storage and the system keybag, both made by
+`restored_external` on a real restore and both refused outside a trusted root. They are now a step of the
+install boot (`hardware.md` "Storage: effaceable storage and the system keybag"): `ios-prep install` also
+builds `contrib/it-install/it_keybag.c`, a helper linked against the ramdisk's own dyld (its three
+`dlopen`/`dlsym`/`dlerror` imports bound by dyld from libSystem, the rest raw syscalls as in `it_install`),
+and stages it on the ramdisk as `/usr/bin/TiSerialFlasher` (an existing file `hfs.py` can replace); the
+same `install` + `kboot` + boot commands as B3 above. `it_install` execs it with the data volume mounted at
+`/mnt2`, and it calls the IPSW's IOKit and MobileKeyBag as the fork's `contrib/it-keybag` does on the A4
+boards: `AppleEffaceableStorage` selectors 3 (isFormatted) and 4 (format), then
+`MKBKeyBagCreateSystem(NULL, "/mnt2")`. The console (`runs/n94/m2-install.log`):
+
+```
+it_keybag: hello (dyld), console fd 5
+[effaceable:INIT] formatting storage
+[effaceable:INIT] format succeeded
+it_keybag: effaceable open 0x00000000 isFormatted 0x00000000 -> 1
+booted from secure root: give device keybag access to everyone
+it_keybag: MKBKeyBagCreateSystem -> 0, /mnt2/keybags/systembag.kb 1495 bytes
+it_install: system keybag in place, keybagd stays enabled
+```
+
+The page store needed nothing new: the format erases and writes the `plog` pool's SLC blocks through the
+single-page opcodes, and every later boot reads `[effaceable:INIT] found current generation, 2, in group 1`
+instead of `unable to find content`. A second install boot leaves both alone (`systembag.kb present`).
+`it_install` now writes launchd's overrides with only the Bluetooth jobs disabled; keybagd is disabled only
+when `it_keybag` fails.
+
+The normal boot with keybagd (`runs/n94/m2-root.log`, `run-m2.sh 420`):
+
+- Same path as B3 to the daemons: `BSD root: disk0s1`, both volumes clean and mounted, `launchd[1]` at 5 s,
+  CommCenter, mediaserverd, ptpd, iapd, apsd, mobileassetd under their sandbox profiles.
+- keybagd runs: `AppleKeyStore:cp_key_store_action(1)` twice at 17 s, the kernel taking the system bag
+  (the same two lines the install boot printed when it was created; the B3 run had none), and no `FATAL
+  KEYBAG ERROR` and no reboot into recovery. keybagd's own `System Keybag loaded` goes to syslog, not to
+  the serial console, so the console's proof is the keystore action plus the uptime.
+- backboardd reaches the display stack: `IOMobileFramebufferUserClient::set_hotplug_notify`, the light
+  sensor's `preEmptiveSensorStartup`, AppleRGBOUT powered up and down; but `CLCD not initied by iBoot,
+  driver will not load` (the kernel's AppleCLCD expects the pipe registers as iBoot leaves them, the same
+  gate the A4 display model had to pre-set: `docs/ipad1/ios4.md` "Past the keybag"), so there is no main
+  framebuffer and SpringBoard has nothing to draw on. That is M3.
+- The USB stack comes up as the PTP + Apple Mobile Device configuration (AppleUSBMux, AppleUSBEthernet
+  registered), the baseband's HSIC port times out as before.
+- 7 minutes, seven monitor samples `VM status: running`, no panic, no reboot.
+
+Next: M3 (the panel: AppleCLCD/MIPI-DSI with a framebuffer the display pipe draws, so backboardd and
+SpringBoard have a screen), the PMU standby on halt, the data volume's journal.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 
