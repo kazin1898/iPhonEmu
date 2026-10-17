@@ -25,6 +25,7 @@ sys.path.insert(0, HERE)
 
 import img3  # noqa: E402
 import kboot  # noqa: E402
+import nand_ppn  # noqa: E402
 import keys as keymod  # noqa: E402
 import lzss  # noqa: E402
 from devicetree import DeviceTree  # noqa: E402
@@ -261,6 +262,13 @@ def cmd_kboot(args):
     build_kboot(args.dir, args)
 
 
+def cmd_nand(args):
+    path = nand_ppn.write_store(args.out)
+    log(f"PPN page store: {path} ({nand_ppn.PPN['channels']}x{nand_ppn.PPN['ce_per_channel']} CEs, "
+        f"{nand_ppn.PPN['caus_per_ce']} CAUs x {nand_ppn.PPN['blocks_per_cau']} blocks x "
+        f"{nand_ppn.PPN['pages_per_block']} x {nand_ppn.PPN['page_bytes']} B); the page files are made on first use")
+
+
 def cmd_inventory(args):
     rows, kexts, ver = write_inventory(args.dir, args.docs)
     print(ver)
@@ -302,6 +310,9 @@ def main():
     p.add_argument("--keys", help="keys JSON (else cached beside the IPSW, else The Apple Wiki)")
     add_kboot_opts(p)
     p.set_defaults(fn=cmd_kboot)
+    p = sub.add_parser("nand", help="write a blank PPN page store (geometry.json) for -M iPhone-4S,nand=DIR")
+    p.add_argument("--out", required=True)
+    p.set_defaults(fn=cmd_nand)
     p = sub.add_parser("inventory")
     p.add_argument("dir")
     p.add_argument("--docs")

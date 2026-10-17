@@ -12,6 +12,7 @@ at 0x80001000, so with no KASLR slide the kernel's VA == PA; timebase 24 MHz; bo
 """
 import hashlib
 import struct
+import nand_ppn
 
 from devicetree import DeviceTree, le
 from macho import MachO
@@ -25,6 +26,7 @@ ROOT_MATCHING = ("<dict><key>IOProviderClass</key><string>IOMedia</string><key>I
 TEST_IMEI = "004999010640000"   # GSMA's test range, as the A4 boards use
 
 # A4 raw-NAND geometry (16 GB, eight dies) the h2fmi model serves; only the keys the DT has are written.
+# The PPN geometry (--nand ppn, the N94's own kind of NAND) is nand_ppn.PPN.
 NAND_RAW = [
     ("#ce", 8), ("#die-ce", 1), ("#ce-blocks", 0x1000), ("#block-pages", 128), ("#page-bytes", 4096),
     ("#spare-bytes", 0x80), ("vendor-type", 0x10_0014), ("#databus", 2),
@@ -221,7 +223,8 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
             for k, v in NAND_RAW:
                 dt.set_if(node, k, v)
         else:
-            dt.set_if(node, "ppn-device", 1)
+            for k, v in nand_ppn.dt_props():
+                dt.set_if(node, k, v)
     # memory layout
     dt.set("pram", "reg", [board.pram_pa, PRAM_SIZE])
     dt.set("vram", "reg", [board.vram_pa, VRAM_SIZE])

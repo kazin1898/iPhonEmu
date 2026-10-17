@@ -54,6 +54,7 @@ struct N94MachineState {
     DeviceState *gpio;
     synopsys_usb_state *usb_otg;
     char *kboot_path;
+    char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
 };
 
 #define KBOOT_MAGIC "K48KBOOT"
@@ -242,6 +243,9 @@ static void n94_init(MachineState *machine)
      */
     dev = qdev_new(TYPE_S5L8940_IOP);
     object_property_set_link(OBJECT(dev), "aic", OBJECT(s->aic), &error_abort);
+    if (s->nand_path) {
+        qdev_prop_set_string(dev, "nand", s->nand_path);
+    }
     sbd = SYS_BUS_DEVICE(dev);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_IOP_BASE);
@@ -358,9 +362,23 @@ static void n94_set_kboot(Object *obj, const char *value, Error **errp)
     s->kboot_path = g_strdup(value);
 }
 
+static char *n94_get_nand(Object *obj, Error **errp)
+{
+    return g_strdup(N94_MACHINE(obj)->nand_path);
+}
+
+static void n94_set_nand(Object *obj, const char *value, Error **errp)
+{
+    N94MachineState *s = N94_MACHINE(obj);
+
+    g_free(s->nand_path);
+    s->nand_path = g_strdup(value);
+}
+
 static void n94_instance_finalize(Object *obj)
 {
     g_free(N94_MACHINE(obj)->kboot_path);
+    g_free(N94_MACHINE(obj)->nand_path);
 }
 
 static void n94_class_init(ObjectClass *klass, const void *data)
@@ -381,6 +399,9 @@ static void n94_class_init(ObjectClass *klass, const void *data)
     object_class_property_add_str(klass, "kboot", n94_get_kboot, n94_set_kboot);
     object_class_property_set_description(klass, "kboot",
         "K48KBOOT bundle from tools/ios-prep (required)");
+    object_class_property_add_str(klass, "nand", n94_get_nand, n94_set_nand);
+    object_class_property_set_description(klass, "nand",
+        "PPN page-store directory (geometry.json + ch<n>-ce<m>.pages, tools/ios-prep nand); blank chips if unset");
 }
 
 static const TypeInfo n94_machine_info = {
