@@ -273,6 +273,50 @@ kernel against the model (`runs/n94/m2-root.log`, `-trace 's5l8940_iop*'`):
   and the kernel reads the image from IOFlashNVRAM, as xnu does on any board without a proxy.
 - The answer interrupt is deferred 100 us after the doorbell, as the A4 HLE does; erases of blocks that
   are already holes are skipped (QEMU's win32 file driver has no unmap, so zeroing would allocate).
+- **Marker pages** (B3): `markers.json` beside `geometry.json` names host files ("sources"); a stored
+  logical page whose first 16 bytes are the marker magic (`iPhonEmu-marker1`, then u32 source, u32 4 KiB
+  block, u32 source ^ block ^ 0xA5000000) is served as that block of that file, on the PPN read-multi and
+  single-read paths. The guest's installer writes the system volume as 312,445 such pages, so the FTL lays
+  the volume out in its own (undocumented) on-flash format while the host keeps the 1.2 GiB; a page the
+  guest rewrites loses the magic and is an ordinary page from then on. The store grows by the markers
+  themselves (1.3 GB on disk after an install: each is a 4 KiB page of mostly zeros, stored XOR 0xff).
+
+## Storage: the install boot (B3, 2026-10-17)
+
+The system volume reaches the FTL's disk through the guest, as a restore would put it there, with the
+IPSW's own restore ramdisk as the trusted root and the emulator's helper where `restored_external` runs:
+
+- **`contrib/it-install/it_install.c`**, the 4S's counterpart of the fork's `it_keybag`/`it_boot`: no libc,
+  Darwin syscalls through `svc 0x80` (number in r12, carry set on error). `tools/ios-prep/guest_install.py`
+  builds it with the MSYS2 clang as a bare-metal armv7 ELF (ARM mode, no PIC, no writable data), links it
+  with `ld.lld` at the Mach-O's `__TEXT` address and wraps the one segment in a static Mach-O
+  (`MH_EXECUTE`, `__PAGEZERO`, `__TEXT`, `LC_UNIXTHREAD`, no dyld, no signature: the boot-args carry the
+  fork's `amfi_allow_any_signature=1` and `cs_enforcement_disable=1`). The kernel execs it from the
+  ramdisk grown by `hfs.py` (the stock image is 100% full) and it runs as pid 3 under launchd.
+- **The ARM kernel's syscall arguments** are packed 32-bit words (APCS): its own `lseek` handler reads
+  `fd, offset low, offset high, whence` from r0-r3 (`sysent` at 0x802f00b8: `pread` has 5 words,
+  `lseek` 4, `mmap` 7, no munge functions), so a 64-bit argument is two consecutive words with no
+  alignment pad. `pread`/`pwrite` on `/dev/rdisk0` still returned EOF and `EIO` wherever the offset was
+  put, while `lseek` + `read`/`write` on the raw device and `pread`/`pwrite` on the buffered `/dev/disk0`
+  work; the helper uses `lseek` + `read`/`write` (its `IT_PROBE` build keeps the diagnostics). `fork`
+  returns the pid to both sides and tells the child by r1 = 1 (libc's stub zeroes r0 there).
+- **What the helper does**: waits for `/dev/rdisk0` (4096-byte blocks, 1,953,125 of them), writes the
+  system partition as marker pages in 128 KiB writes (159,770 PPN page programs through the model, 40 s of
+  wall time), then the MBR (two `0xAF` entries: system at LBA 1, data to the end), closes the disk so
+  `IOFDiskPartitionScheme` publishes `disk0s1`/`disk0s2`, runs the ramdisk's `newfs_hfs -s -v Data`,
+  `fsck_hfs -fy` and `mount_hfs` on the data partition, creates the directories iOS expects under
+  `/private/var` and writes launchd's overrides database (`db/launchd.db/com.apple.launchd/overrides.plist`,
+  what `launchctl unload -w` writes) with `com.apple.mobile.keybagd` disabled, syncs and
+  `reboot(RB_HALT | RB_QUICK)`. Every step is idempotent; a second run finds the MBR and only revisits the
+  data volume.
+- **Why keybagd is held off**: with no system keybag (`/private/var/keybags/systembag.kb`, which needs
+  formatted effaceable storage and MobileKeyBag: B4) `keybagd`'s `kb_load` fails, it prints `FATAL KEYBAG
+  ERROR: kb_load`, sets `auto-boot=false` and reboots into recovery 20 s after launchd starts. The knob
+  lives on the emulator's data volume; the system volume stays as Apple shipped it.
+- **The halt**: `reboot(RB_HALT)` runs the kernel's shutdown (`AppleNANDFTL::systemWillShutdown`, the FTL
+  flushed) and `pmu go stdby`, after which the kernel panics (`panic(cpu 0 caller 0x80017d65)`): the D1881
+  model has no standby state. Harmless for the install boot (the run script quits on `it_install: done`);
+  the model should power the machine off there.
 
 ## Storage: the decision (2026-10-17)
 
@@ -306,7 +350,7 @@ A4 HLE's shape, `s5l8930_iop.c`), **and the guest doing its own install** instea
 |---|---|---|---|
 | B1 | The IOP as an AIC client (its own WHOAMI, IACK type-7 timer/doorbell events, MASK_CLR, TARGET bit), the 0x3F300000 block, the `IPID` doorbell/NMI, vector 2 back, EmbeddedIOP-47 rings (64-byte entries, `cnfg` at 0x14000) and control messages | `s5l8930_iop.c`, `s5l8940_aic.c` | 2-3 days |
 | B2 | The PPN FMI opcodes on a PPN page store (CAU/block/page geometry from the DT, parameter page, controller info, CAU BBT, 1536-byte boot pages, read/program/erase multi with PPN status arrays) | the raw opcode handlers as a template; the firmware's `h2fmi_ppn_iop_*` and the kext's `generatePpnDmaLists` give the structs | 5-8 days |
-| B3 | First boot as an install: boot-args `nand-enable-reformat=1`, a NAND partition table in the boot blocks (write it from `ios-prep` - `nand_part_core`'s reader is decompiled - or let `ioflashstoragetool` do it), the FTL formats the bulk, then the system volume: a guest helper writes the MBR plus *marker* sectors (magic + LBA) over `/dev/rdisk0` and the page store serves every marker page from the host's `rootfs.hfs`/data image, so no sFTL knowledge is needed; the helper is a hand-made static armv7 Mach-O (raw syscalls, no toolchain) launched by the ramdisk's launchd | `s5l8930_iop.c`'s store, `tools/ios-prep` | 4-6 days |
+| B3 | **done 2026-10-17** ("Storage: the install boot" above): the partition table from `ios-prep`, the FTL's own format on the first boot, then the system volume as marker pages written by `contrib/it-install` from the restore ramdisk and served from `rootfs.hfs` by the page store; `BSD root: disk0s1`, launchd and the daemons from the NAND | `s5l8930_iop.c`'s store, `tools/ios-prep` | 4-6 days |
 | B4 | Effaceable format + system keybag (needed for SpringBoard, not for launchd): the A4 precedent is a restore-ramdisk one-shot; here it needs either an iOS toolchain for a helper that calls the user clients, or a Python restore host (usbmux + restored + asr over `docs/tcp-usb-protocol.md`) | ipad1's one-shot | 3-5 days, after M2 |
 
 About three weeks to the M2 definition (real root from the NAND, IONVRAM, launchd and daemons, no reboot loop).
@@ -350,7 +394,9 @@ Alternatives, costed:
    **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
    `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
-6. **Storage**: decided by the user on 2026-10-17 ("Storage: the decision", option B): PPN through a mailbox-level IOP model and a PPN page store, the guest formatting the NAND on its first boot; B1-B4 in that order.
-   firmware vs a PPN model.
+6. **Storage**: decided by the user on 2026-10-17 ("Storage: the decision", option B) and done through B3
+   the same day: PPN through a mailbox-level IOP model and a PPN page store, the guest formatting the NAND
+   and installing the system volume on its first boot. Open: B4 (effaceable storage and the system keybag,
+   so keybagd can run), the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.

@@ -5,52 +5,161 @@
     {
       "name": "System",
       "items": [
-        {"name": "Toolchain and Windows build", "percent": 100, "weight": 2, "note": "MSYS2 UCRT64, QEMU 11.0.3 links; MinGW fixes upstreamable"},
-        {"name": "Firmware preparation (ios-prep)", "percent": 90, "weight": 3, "note": "IPSW to kboot, rootfs, PPN NAND image; boot logo and data volume pending"},
-        {"name": "Boot to launchd (userland)", "percent": 55, "weight": 5, "note": "M2 on the restore ramdisk; the real root from the NAND is B3"},
-        {"name": "Storage: IOP, PPN NAND, FTL, NVRAM", "percent": 60, "weight": 6, "note": "FTL formats and opens, IONVRAM up; system volume (B3), effaceable + keybag (B4) open"},
-        {"name": "Persistence (data volume, NVRAM across boots)", "percent": 20, "weight": 2, "note": "NAND overlay writes land; nothing survives a reinstall yet"}
+        {
+          "name": "Toolchain and Windows build",
+          "percent": 100,
+          "weight": 2,
+          "note": "MSYS2 UCRT64, QEMU 11.0.3 links; MinGW fixes upstreamable"
+        },
+        {
+          "name": "Firmware preparation (ios-prep)",
+          "percent": 95,
+          "weight": 3,
+          "note": "IPSW to kboot, rootfs, PPN NAND store, the install boot's helper and ramdisk; boot logo pending"
+        },
+        {
+          "name": "Boot to launchd (userland)",
+          "percent": 80,
+          "weight": 5,
+          "note": "M2: BSD root disk0s1 from the NAND, launchd and the daemons; SpringBoard needs the keybag (B4)"
+        },
+        {
+          "name": "Storage: IOP, PPN NAND, FTL, NVRAM",
+          "percent": 85,
+          "weight": 6,
+          "note": "FTL formats and opens, IONVRAM up, system volume installed as marker pages (B3); effaceable + keybag (B4) open"
+        },
+        {
+          "name": "Persistence (data volume, NVRAM across boots)",
+          "percent": 55,
+          "weight": 2,
+          "note": "data volume made by the install boot, NVRAM generations and FTL state survive boots; keybag and sealing open"
+        }
       ]
     },
     {
       "name": "Processor and platform",
       "items": [
-        {"name": "Cortex-A9 core, TCG", "percent": 70, "weight": 4, "note": "one core boots; second core, IPIs and SMP bring-up pending"},
-        {"name": "Apple AIC and timers", "percent": 80, "weight": 3, "note": "vectors, masks, per-CPU timer FIQ; IPI and cpu1 timer open"},
-        {"name": "PMGR clocks, GPIO, DWI, watchdog, PL310", "percent": 55, "weight": 3, "note": "A4 models at A5 addresses; the A5 clock table is still the A4 map"},
-        {"name": "PMU D1881, I2C, sensors", "percent": 50, "weight": 3, "note": "events, ADC, RTC, restart; ADC channels, wake events, gyro/accel calibration open"},
-        {"name": "DMA (CDMA) and crypto (AES, SHA, PKE)", "percent": 60, "weight": 2, "note": "CDMA + AES filter from the A4; SHA-2 block new, untouched by the kernel so far"},
-        {"name": "USB (OTG device, EHCI/OHCI, HSIC)", "percent": 35, "weight": 2, "note": "blocks wired, OTG enumerates endpoints; usbmux/AFC and HSIC devices pending"}
+        {
+          "name": "Cortex-A9 core, TCG",
+          "percent": 70,
+          "weight": 4,
+          "note": "one core boots; second core, IPIs and SMP bring-up pending"
+        },
+        {
+          "name": "Apple AIC and timers",
+          "percent": 80,
+          "weight": 3,
+          "note": "vectors, masks, per-CPU timer FIQ; IPI and cpu1 timer open"
+        },
+        {
+          "name": "PMGR clocks, GPIO, DWI, watchdog, PL310",
+          "percent": 55,
+          "weight": 3,
+          "note": "A4 models at A5 addresses; the A5 clock table is still the A4 map"
+        },
+        {
+          "name": "PMU D1881, I2C, sensors",
+          "percent": 50,
+          "weight": 3,
+          "note": "events, ADC, RTC, restart; ADC channels, wake events, gyro/accel calibration open"
+        },
+        {
+          "name": "DMA (CDMA) and crypto (AES, SHA, PKE)",
+          "percent": 60,
+          "weight": 2,
+          "note": "CDMA + AES filter from the A4; SHA-2 block new, untouched by the kernel so far"
+        },
+        {
+          "name": "USB (OTG device, EHCI/OHCI, HSIC)",
+          "percent": 35,
+          "weight": 2,
+          "note": "blocks wired, OTG enumerates endpoints; usbmux/AFC and HSIC devices pending"
+        }
       ]
     },
     {
       "name": "Video and input",
       "items": [
-        {"name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel", "percent": 5, "weight": 5, "note": "A4 models exist to reuse; nothing drawn yet (M3)"},
-        {"name": "GPU: GL bridge on Windows (ANGLE)", "percent": 0, "weight": 6, "note": "the fork's host executor is macOS-only; an EGL/ANGLE backend is new work"},
-        {"name": "Multitouch (SPI) and buttons", "percent": 0, "weight": 3, "note": "A4 digitizer models to adapt; n94 profile unknown"},
-        {"name": "Audio (I2S, CS42L63, AE2)", "percent": 0, "weight": 2, "note": "ae2 hidden; no sound path"}
+        {
+          "name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel",
+          "percent": 5,
+          "weight": 5,
+          "note": "A4 models exist to reuse; nothing drawn yet (M3)"
+        },
+        {
+          "name": "GPU: GL bridge on Windows (ANGLE)",
+          "percent": 0,
+          "weight": 6,
+          "note": "the fork's host executor is macOS-only; an EGL/ANGLE backend is new work"
+        },
+        {
+          "name": "Multitouch (SPI) and buttons",
+          "percent": 0,
+          "weight": 3,
+          "note": "A4 digitizer models to adapt; n94 profile unknown"
+        },
+        {
+          "name": "Audio (I2S, CS42L63, AE2)",
+          "percent": 0,
+          "weight": 2,
+          "note": "ae2 hidden; no sound path"
+        }
       ]
     },
     {
       "name": "Radios (stubs)",
       "items": [
-        {"name": "Wi-Fi over HSIC, Bluetooth, baseband", "percent": 10, "weight": 2, "note": "baseband unmatched, HSIC ports time out cleanly; stubs for M4"}
+        {
+          "name": "Wi-Fi over HSIC, Bluetooth, baseband",
+          "percent": 10,
+          "weight": 2,
+          "note": "baseband unmatched, HSIC ports time out cleanly; stubs for M4"
+        }
       ]
     },
     {
       "name": "Product",
       "items": [
-        {"name": "Speed: 1:1 with a real 4S on PC", "percent": 0, "weight": 5, "note": "MTTCG, WFI, profiling; measured after M3"},
-        {"name": "iPhonEmu.exe (open IPSW, prepare, boot)", "percent": 0, "weight": 3, "note": "after M4"},
-        {"name": "Android build (arm64 host, native GLES)", "percent": 0, "weight": 4, "note": "after the PC is stable"}
+        {
+          "name": "Speed: 1:1 with a real 4S on PC",
+          "percent": 0,
+          "weight": 5,
+          "note": "MTTCG, WFI, profiling; measured after M3"
+        },
+        {
+          "name": "iPhonEmu.exe (open IPSW, prepare, boot)",
+          "percent": 0,
+          "weight": 3,
+          "note": "after M4"
+        },
+        {
+          "name": "Android build (arm64 host, native GLES)",
+          "percent": 0,
+          "weight": 4,
+          "note": "after the PC is stable"
+        }
       ]
     }
   ],
   "milestones": [
-    {"name": "M1 serial console", "done": true, "date": "2026-10-17"},
-    {"name": "M2 launchd and daemons", "done": false, "note": "reached on the restore ramdisk; real root pending"},
-    {"name": "M3 Setup / lock screen", "done": false},
-    {"name": "M4 home screen and apps", "done": false}
+    {
+      "name": "M1 serial console",
+      "done": true,
+      "date": "2026-10-17"
+    },
+    {
+      "name": "M2 launchd and daemons",
+      "done": true,
+      "date": "2026-10-17"
+    },
+    {
+      "name": "M3 Setup / lock screen",
+      "done": false
+    },
+    {
+      "name": "M4 home screen and apps",
+      "done": false
+    }
   ]
 }

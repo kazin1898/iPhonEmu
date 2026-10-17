@@ -10,7 +10,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | | What | Proof | State |
 |---|---|---|---|
 | M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
-| M2 | `launchd` and its daemons | `runs/n94/m2-serial.log` | **done** 2026-10-17 on the IPSW's restore ramdisk (`rd=md0`): launchd, restored_external; the NAND root is still open |
+| M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot (keybagd and the Bluetooth jobs held off until B4; see "B3") |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | screenshot | pending |
 | M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
 
@@ -114,8 +114,63 @@ started successfully`, then waits for partition 1 of that disk (`hardware.md` "S
 NVRAM persists: a restore-ramdisk boot (`--ramdisk restore --nand ppn`, `runs/n94/m2-rd.log`) runs
 `/usr/sbin/nvram`, syncs ("committing changes... done"), reboots, and the next start reads the saved
 generation back instead of "starting with freshly wiped NVRAM".
-Next: B3, the system volume on the FTL's disk (an install boot on the restore ramdisk writing the MBR and
-marker sectors the page store maps onto `rootfs.hfs`), then B4 (effaceable storage and the keybag).
+
+### B3: the system volume on the FTL's disk, the real root (2026-10-17)
+
+The FTL's on-flash format is undocumented, so the volume goes in through the guest: one *install boot* on
+the IPSW's restore ramdisk with the emulator's helper (`contrib/it-install`, built by `ios-prep install`)
+in place of `restored_external`. It writes the system partition as *marker* pages (magic, source, 4 KiB
+block) the page store serves from `rootfs.hfs` on the host, the MBR, and makes the data volume
+(`hardware.md` "Storage: the install boot"). From the repository root, on a store `ios_prep.py nand` made:
+
+```
+python tools/ios-prep/ios_prep.py install ../firmware/n94_10B329 --nand ../runs/n94/nand --out ../runs/n94/install
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn --hide arm-io/ae2 --ramdisk restore \
+    --ramdisk-file ../runs/n94/install/ramdisk-install.dmg --bundle ../runs/n94/install/kboot.bin \
+    --add-boot-arg nand-enable-reformat=1
+build/qemu-system-arm -M iPhone-4S,kboot=../runs/n94/install/kboot.bin,nand=../runs/n94/nand \
+    -serial file:../runs/n94/m2-install.log -display none -monitor stdio
+```
+
+`install` needs clang and ld.lld (the MSYS2 UCRT64 ones are found by themselves; `--clang`/`--lld`
+otherwise). On a blank store the kernel formats the FTL first (`nand-enable-reformat=1`, nine minutes);
+then launchd runs the helper: `it_install: hello`, the 312,445 markers (40 s), `MBR written`, `newfs_hfs`,
+`mount_hfs`, `launchd overrides`, `it_install: done`, and the halt (`runs/n94/run-install.sh`, outside
+the repository, quits QEMU on that line; the kernel's own halt ends in a panic after `pmu go stdby`, the
+D1881 model has no standby yet). A second install boot finds the MBR and only revisits the data volume.
+
+The normal boot is the bundle with no ramdisk, the device tree's `root-matching` (IOMedia, Partition ID 1)
+as the A4 boards use it:
+
+```
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn --hide arm-io/ae2
+build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=../runs/n94/nand -serial stdio -display none
+```
+
+What happens (`runs/n94/m2-root.log`, `runs/n94/run-m2.sh`):
+
+- `IOFDiskPartitionScheme` publishes `disk0s1` and `disk0s2` from the MBR; `Got boot device =
+  .../AppleSwissPPNFTL/IOFlashBlockDevice/IOBlockStorageDriver/...`, **`BSD root: disk0s1`**, about 20 s
+  after power-on (the FTL opens without formatting; the page store answers the catalog reads from
+  `rootfs.hfs`).
+- launchd runs `fsck_hfs` on both volumes (`QUICKCHECK ONLY; FILESYSTEM CLEAN`) and mounts them as the
+  IPSW's fstab says: `/dev/disk0s1 on / (hfs, local, read-only, journaled, noatime)`, `/dev/disk0s2 on
+  /private/var (hfs, local, nodev, nosuid, noatime)`.
+- The daemons come up from the real system volume: UserEventAgent, notifyd, backboardd, configd, syslogd,
+  CommCenter, sandboxd, mediaserverd, lockdownd, wifid, ptpd, iapd, apsd, mobileassetd, securityd,
+  SpringBoard's prerequisites; FIPS user-space POST passes. Wi-Fi and the baseband time out on their HSIC
+  ports as before, Bluetooth and keybagd are not started (below).
+- Two jobs are disabled through launchd's overrides database on the data volume, written by the install
+  helper (the system volume is untouched): `com.apple.mobile.keybagd`, which without a system keybag (B4)
+  prints `FATAL KEYBAG ERROR: kb_load` and reboots into recovery 20 s after launchd, and
+  `com.apple.BTServer`/`com.apple.BlueTool`, as the fork keeps them off on the A4 boards: with nothing
+  behind uart3, BlueTool's HCI traffic through AppleOnboardSerial's rx DMA path ended in a kernel assertion
+  (`AppleSimpleUARTSync.cpp:2177`) when uart3 and uart5 were still in the unimplemented window; the
+  machine now has the device tree's four UARTs (0, 1, 3, 5).
+- The run of 7 minutes ends with launchd and its daemons alive and no reboot: M2.
+
+Next: B4 (effaceable storage and the system keybag, so keybagd and data protection work: the keybag is
+what SpringBoard needs), the PMU standby on halt, the data volume's journal, then M3 (the panel).
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 
