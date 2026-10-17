@@ -4,9 +4,12 @@
  * register 0x5d four bytes at a time in a tight loop for as long as the
  * address NAKed (there was nothing on the bus), which is where the boot
  * stopped. Nothing is modeled yet beyond "a register holds what was written
- * and reads back"; -trace s5l8940_d1881* shows what the kernel asks for, so
- * the registers the drivers depend on (events, RTC, ADC, buttons) can be
- * given meaning one at a time.
+ * and reads back", except the restart: launchd's reboot(RB_AUTOBOOT) ends in
+ * the kernel's "pmu restart", which writes 0xa1 <- 0 and then 0x96 <- 0x2b
+ * and waits for the part to reset the SoC (it panics when nothing happens),
+ * so that write resets the machine. -trace s5l8940_d1881* shows what the
+ * kernel asks for, so the registers the drivers depend on (events, RTC, ADC,
+ * buttons) can be given meaning one at a time.
  */
 #include "qemu/osdep.h"
 #include "qemu/module.h"
@@ -14,9 +17,13 @@
 #include "hw/core/irq.h"
 #include "hw/arm/s5l8940.h"
 #include "migration/vmstate.h"
+#include "system/runstate.h"
 #include "trace.h"
 
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8940D1881State, S5L8940_D1881)
+
+#define D1881_SYS_CONTROL   0x96    /* the kernel's PE_halt_restart writes 0x2b here */
+#define D1881_SYS_RESTART   0x2b
 
 struct S5L8940D1881State {
     I2CSlave parent_obj;
@@ -45,7 +52,11 @@ static int d1881_send(I2CSlave *i2c, uint8_t data)
         return 0;
     }
     trace_s5l8940_d1881_write(s->ptr, data);
-    s->regs[s->ptr++] = data;
+    s->regs[s->ptr] = data;
+    if (s->ptr == D1881_SYS_CONTROL && data == D1881_SYS_RESTART) {
+        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+    }
+    s->ptr++;
     return 0;
 }
 

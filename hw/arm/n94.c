@@ -33,6 +33,10 @@
 #include "hw/arm/ipod_touch_cs42l58.h"
 #include "hw/arm/ipod_touch_lis302dl.h"
 #include "hw/i2c/i2c.h"
+#include "hw/arm/ipod_touch_usb_otg.h"
+#include "hw/arm/ipod_touch_usb_phys.h"
+#include "hw/usb/hcd-ehci.h"
+#include "hw/usb/hcd-ohci.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/arm/cpu.h"
@@ -48,6 +52,7 @@ struct N94MachineState {
     DeviceState *aic;
     DeviceState *pmgr;
     DeviceState *gpio;
+    synopsys_usb_state *usb_otg;
     char *kboot_path;
 };
 
@@ -270,6 +275,47 @@ static void n94_init(MachineState *machine)
                 qdev_prop_set_string(DEVICE(slave), "mount", "1,2,3");
             }
             i2c_slave_realize_and_unref(slave, bus[slaves[i].bus], &error_fatal);
+        }
+    }
+
+    /*
+     * USB, as ipad1.c: the iPod's PHY register file and Synopsys DWC OTG core
+     * in device mode (the A5 keeps both layouts; GHWCFG as the A4's), with
+     * the OTG's built-in host enumerating the device when no usbmuxd bridge
+     * is dialed (IT_USB_TCP=host:port), plus plain EHCI and OHCI for the host
+     * side. The restore ramdisk's restored_external brings the stack up and
+     * the EHCI's init panicked on the unimplemented window.
+     */
+    {
+        static uint32_t hwcfg[] = { 0, 0x7a8f60d0, 0x082000e8, 0x01f08024 };
+
+        dev = qdev_new(TYPE_IPOD_TOUCH_USB_PHYS);
+        sbd = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, S5L8940_USB_PHY_BASE);
+
+        dev = ipod_touch_init_usb_otg(n94_irq(s, S5L8940_IRQ_USB_OTG), hwcfg);
+        s->usb_otg = S5L8900USBOTG(dev);
+        synopsys_usb_set_tcp_addr(s->usb_otg, NULL);
+        s->usb_otg->builtin_host = !s->usb_otg->server_host && !getenv("IT_USB_TCP");
+        s->usb_otg->host_charge = true;
+        s->usb_otg->withhold_charge = false;
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+        memory_region_add_subregion(sysmem, S5L8940_USB_OTG_BASE, &s->usb_otg->iomem);
+
+        dev = qdev_new(TYPE_EXYNOS4210_EHCI);
+        sbd = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, S5L8940_USB_EHCI_BASE);
+        sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_USB_EHCI));
+
+        for (i = 0; i < 2; i++) {
+            dev = qdev_new(TYPE_SYSBUS_OHCI);
+            qdev_prop_set_uint32(dev, "num-ports", 1);      /* DT port-count */
+            sbd = SYS_BUS_DEVICE(dev);
+            sysbus_realize_and_unref(sbd, &error_fatal);
+            sysbus_mmio_map(sbd, 0, i ? S5L8940_USB_OHCI1_BASE : S5L8940_USB_OHCI0_BASE);
+            sysbus_connect_irq(sbd, 0, n94_irq(s, i ? S5L8940_IRQ_USB_OHCI1 : S5L8940_IRQ_USB_OHCI0));
         }
     }
 

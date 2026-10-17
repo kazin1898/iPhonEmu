@@ -35,6 +35,11 @@
 #define S5L8940_AES_BASE         0x37800000   /* its AES filter contexts */
 #define S5L8940_I2S_BASE(n)      (0x34190000 + (n) * 0x1000)
 #define S5L8940_I2C_BASE(n)      (0x33200000 + (n) * 0x100000)   /* i2c0 PMU/codec, i2c1 compass/ALS, i2c2 accel/gyro */
+#define S5L8940_USB_PHY_BASE     0x36000000   /* otgphyctrl,s5l8940x */
+#define S5L8940_USB_OTG_BASE     0x36100000   /* usb-complex ranges: usb-device, Synopsys DWC OTG */
+#define S5L8940_USB_EHCI_BASE    0x36400000   /* usb-ehci reg[0]; reg[1] 0x36700000 stays unimplemented */
+#define S5L8940_USB_OHCI0_BASE   0x36500000
+#define S5L8940_USB_OHCI1_BASE   0x36600000
 
 /* AIC vector numbers (DT interrupts) */
 #define S5L8940_IRQ_WDT          4
@@ -42,6 +47,10 @@
 #define S5L8940_IRQ_GPIO         119
 #define S5L8940_IRQ_CDMA(ch)     (50 + (ch))  /* DT cdma interrupts: channels 1..44 at 51..94 */
 #define S5L8940_IRQ_I2C(n)       (18 + (n))
+#define S5L8940_IRQ_USB_OTG      11
+#define S5L8940_IRQ_USB_EHCI     12
+#define S5L8940_IRQ_USB_OHCI0    13
+#define S5L8940_IRQ_USB_OHCI1    14
 #define S5L8940_AIC_NUM_IRQS     192          /* AIC_INFO[9:0]; the IPI vectors follow at 0xc0.. */
 
 /*
