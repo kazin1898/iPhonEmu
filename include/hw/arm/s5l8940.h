@@ -42,12 +42,13 @@
 #define S5L8940_USB_OHCI1_BASE   0x36600000
 #define S5L8940_IOP_BASE         0x3f300000   /* iop,s5l8940x: the AP-side control block (AppleA5IOP) */
 #define S5L8940_IOP_SIZE         0x1000
+#define S5L8940_SPI_BASE(n)      (0x32000000 + (n) * 0x100000)   /* spi-1,samsung; spi1 carries multi-touch,n94 */
 
 /*
  * Display: the A4 blocks at the A5 addresses (hw/arm/s5l8930_display.c for the
  * pipes, CLCD, RGBOUT and TV-out; hw/arm/ipod_touch_mipi_dsi.c for the DSIM).
- * DT clcd reg[0..2], rgbout reg[0..1], tv-out, mipi-dsim reg[0] (reg[1],
- * 0x3f110000, is the "sac" the kernel never reaches for), dart-nrt, dart-rt.
+ * DT clcd reg[0..2], rgbout reg[0..1], tv-out, mipi-dsim reg[0] and reg[1] (the
+ * "sac", which every panel power-on after the first waits on), dart-nrt, dart-rt.
  */
 #define S5L8940_DISP_PIPE0_BASE  0x3a100000   /* AppleH4PDisplayPipe, 0x7000 */
 #define S5L8940_CLCD_BASE        0x39200000   /* AppleH4PCLCD's timing generator, 0x2000 */
@@ -56,6 +57,7 @@
 #define S5L8940_RGBOUT2_BASE     0x39600000   /* its control block */
 #define S5L8940_TVOUT_BASE       0x39400000
 #define S5L8940_DSIM_BASE        0x39500000   /* mipi-dsim-1,samsung */
+#define S5L8940_SAC_BASE         0x3f110000   /* mipi-dsim reg[1]: the panel clock's slow adaptive clocking */
 #define S5L8940_DART_NRT_BASE    0x38b00000   /* dart-nrt: mapper-jpeg, mapper-scaler */
 #define S5L8940_DART_RT_BASE     0x3a400000   /* dart-rt: mapper-isp */
 #define S5L8940_IRQ_TVOUT        40
@@ -71,6 +73,7 @@
 #define S5L8940_IRQ_GPIO         119
 #define S5L8940_IRQ_CDMA(ch)     (50 + (ch))  /* DT cdma interrupts: channels 1..44 at 51..94 */
 #define S5L8940_IRQ_I2C(n)       (18 + (n))
+#define S5L8940_IRQ_SPI(n)       (28 + (n))   /* DT spi1 interrupts 0x1d */
 #define S5L8940_IRQ_USB_OTG      11
 #define S5L8940_IRQ_USB_EHCI     12
 #define S5L8940_IRQ_USB_OHCI0    13
@@ -78,6 +81,14 @@
 #define S5L8940_IRQ_IOP          2            /* IOP -> AP (DT iop interrupts) */
 #define S5L8940_IRQ_IOP_DOORBELL 3            /* AP -> IOP: the AIC "IPID" function's argument */
 #define S5L8940_IRQ_FMI(n)       (33 + (n))
+/* GPIO inputs (DT interrupts: the flat pin number) */
+#define S5L8940_GPIO_BTN_MENU    0x00         /* buttons: function-button_menu */
+#define S5L8940_GPIO_BTN_HOLD    0x01
+#define S5L8940_GPIO_BTN_VOLDOWN 0x02         /* the A4 boards have volup here */
+#define S5L8940_GPIO_BTN_VOLUP   0x03
+#define S5L8940_GPIO_BTN_RINGER  0x04
+#define S5L8940_GPIO_PMU_IRQ     0x0d
+#define S5L8940_GPIO_MT_ATN      0x15         /* spi1/multi-touch interrupts {0x15, 0} */
 #define S5L8940_AIC_NUM_IRQS     192          /* AIC_INFO[9:0]; the IPI vectors follow at 0xc0.. */
 
 /*

@@ -122,6 +122,24 @@ const MTSensorProfile mt_profile_n88 = {
     .frame_y0 = -226, .frame_height = 7388,
 };
 
+/*
+ * iPhone 4S (N94): the N1 driver again (multi-touch,n94 -> AppleMultitouchN1SPI), whose personality merges
+ * "N1F56,1" from the system volume's N94.mtprops (10B329: Constructed Firmware 56264 bytes, version 0x0084).
+ * Family 0x56 and that version, so the driver takes the sensor for the firmware it carries. The panel is the
+ * N90/N81 one (3.5", 640x960), so the surface and frame start as mt_profile_n81's.
+ */
+const MTSensorProfile mt_profile_n94 = {
+    .family_id = 0x56,
+    .rows = MT_SENSOR_ROWS, .cols = MT_SENSOR_COLUMNS,
+    .bcd_version = 0x84,
+    .surface_width = MT_SENSOR_SURFACE_WIDTH,
+    .surface_height = MT_SENSOR_SURFACE_HEIGHT,
+    .region_desc = { MT_SENSOR_REGION_DESC }, .region_desc_len = 1,
+    .region_param = { MT_SENSOR_REGION_PARAM }, .region_param_len = 1,
+    .frame_x0 = -69, .frame_width = 4748,
+    .frame_y0 = -215, .frame_height = 7360,
+};
+
 static void prepare_interface_version_response(IPodTouchMultitouchState *s) {
     memset(s->out_buffer + 1, 0, 15);
 

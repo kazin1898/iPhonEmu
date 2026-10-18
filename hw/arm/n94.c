@@ -36,11 +36,14 @@
 #include "hw/arm/ipod_touch_usb_otg.h"
 #include "hw/arm/ipod_touch_usb_phys.h"
 #include "hw/arm/ipod_touch_mipi_dsi.h"
+#include "hw/arm/ipod_touch_spi.h"
 #include "hw/usb/hcd-ehci.h"
 #include "hw/usb/hcd-ohci.h"
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/arm/cpu.h"
+#include "ui/console.h"
+#include "ui/input.h"
 
 #define TYPE_N94_MACHINE MACHINE_TYPE_NAME("iPhone-4S")
 OBJECT_DECLARE_SIMPLE_TYPE(N94MachineState, N94_MACHINE)
@@ -55,6 +58,13 @@ struct N94MachineState {
     DeviceState *gpio;
     DeviceState *display;                /* the display pipe, CLCD, RGBOUT, TV-out (hw/arm/s5l8930_display.c) */
     synopsys_usb_state *usb_otg;
+    MemoryRegion sac;                    /* the panel's adaptive clocking block (n94_sac_ops) */
+    uint32_t sac_regs[0x40];
+    IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
+    bool kbd_cmd, kbd_shift;
+    int kbd_btn_held[Q_KEY_CODE__MAX];   /* qcode -> 1 + button pin */
+    int mtt_x[MT_MAX_FINGERS], mtt_y[MT_MAX_FINGERS];
+    bool mtt_seen[MT_MAX_FINGERS];
     char *kboot_path;
     char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
 };
@@ -165,6 +175,171 @@ static bool n94_kboot_video(const char *path, uint32_t *base, uint32_t *width, u
     *height = ldl_le_p(args + 36);
     return *base != 0 && *width != 0 && *height != 0;
 }
+
+/*
+ * Touch from the host, as ipad1.c does it for the A4 boards: the QEMU pointer (absolute,
+ * 0..32767 over the console, the console being the 640x960 panel in portrait) is finger 0,
+ * the left button pressing it; QMP input-send-event "mtt" events carry up to five fingers.
+ * The digitizer's y runs bottom-up.
+ */
+static void n94_mouse_event(void *opaque, int x, int y, int z, int buttons)
+{
+    IPodTouchMultitouchState *mt = opaque;
+
+    mt->touch_x = x / 32768.0f;
+    mt->touch_y = 1.0f - y / 32768.0f;
+    if (buttons && !mt->touch_down) {
+        ipod_touch_multitouch_on_touch(mt);
+    } else if (!buttons && mt->touch_down) {
+        ipod_touch_multitouch_on_release(mt);
+    } else if (buttons) {
+        ipod_touch_multitouch_on_motion(mt);
+    }
+}
+
+static void n94_mtt_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
+{
+    N94MachineState *s = N94_MACHINE(qdev_get_machine());
+    InputMultiTouchEvent *mtt = evt->u.mtt.data;
+    int slot = mtt->slot;
+    bool down;
+
+    if (slot < 0 || slot >= MT_MAX_FINGERS) {
+        return;
+    }
+    switch (mtt->type) {
+    case INPUT_MULTI_TOUCH_TYPE_DATA:
+        if (mtt->axis == INPUT_AXIS_X) {
+            s->mtt_x[slot] = mtt->value;
+        } else {
+            s->mtt_y[slot] = mtt->value;
+        }
+        s->mtt_seen[slot] = true;
+        return;
+    case INPUT_MULTI_TOUCH_TYPE_BEGIN:
+    case INPUT_MULTI_TOUCH_TYPE_UPDATE:
+    case INPUT_MULTI_TOUCH_TYPE_END:
+    case INPUT_MULTI_TOUCH_TYPE_CANCEL:
+        if (!s->mtt_seen[slot]) {
+            return;
+        }
+        down = mtt->type == INPUT_MULTI_TOUCH_TYPE_BEGIN ||
+               mtt->type == INPUT_MULTI_TOUCH_TYPE_UPDATE;
+        ipod_touch_multitouch_set_finger(s->mt, slot, s->mtt_x[slot] / 32768.0f,
+                                         1.0f - s->mtt_y[slot] / 32768.0f, down);
+        if (!down) {
+            s->mtt_seen[slot] = false;
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+static const QemuInputHandler n94_mtt_handler = {
+    .name  = "iPhone 4S Multitouch",
+    .mask  = INPUT_EVENT_MASK_MTT,
+    .event = n94_mtt_event,
+};
+
+/*
+ * The buttons node's GPIO inputs (AppleM68Buttons): menu 0, hold 1, volume down 2, up 3,
+ * ring/silent 4, active low, resting high in the GPIO model. Host keys as on the A4 boards:
+ * Cmd+Shift+H home, Cmd+L hold/power, Cmd+- and Cmd+= volume; Home, End, Page Down and
+ * Page Up do the same without a modifier (the Windows key rarely reaches the SDL window),
+ * so the monitor's sendkey works too. A key that pressed a button always releases it.
+ */
+static void n94_set_button(N94MachineState *s, int pin, bool down)
+{
+    qemu_set_irq(qdev_get_gpio_in(s->gpio, pin), !down);
+}
+
+static void n94_kbd_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
+{
+    N94MachineState *s = N94_MACHINE(qdev_get_machine());
+    int q = qemu_input_key_value_to_qcode(evt->u.key.data->key);
+    bool down = evt->u.key.data->down;
+    int pin = -1;
+
+    switch (q) {
+    case Q_KEY_CODE_META_L:
+    case Q_KEY_CODE_META_R:
+        s->kbd_cmd = down;
+        return;
+    case Q_KEY_CODE_SHIFT:
+    case Q_KEY_CODE_SHIFT_R:
+        s->kbd_shift = down;
+        return;
+    default:
+        break;
+    }
+    if (q < 0 || q >= Q_KEY_CODE__MAX) {
+        return;
+    }
+    if (!down && s->kbd_btn_held[q]) {
+        pin = s->kbd_btn_held[q] - 1;
+    } else if (down && s->kbd_cmd) {
+        switch (q) {
+        case Q_KEY_CODE_L:     pin = S5L8940_GPIO_BTN_HOLD; break;
+        case Q_KEY_CODE_H:     if (s->kbd_shift) pin = S5L8940_GPIO_BTN_MENU; break;
+        case Q_KEY_CODE_MINUS: pin = S5L8940_GPIO_BTN_VOLDOWN; break;
+        case Q_KEY_CODE_EQUAL: pin = S5L8940_GPIO_BTN_VOLUP; break;
+        default: break;
+        }
+    } else if (down) {
+        switch (q) {
+        case Q_KEY_CODE_HOME:  pin = S5L8940_GPIO_BTN_MENU; break;
+        case Q_KEY_CODE_END:   pin = S5L8940_GPIO_BTN_HOLD; break;
+        case Q_KEY_CODE_PGDN:  pin = S5L8940_GPIO_BTN_VOLDOWN; break;
+        case Q_KEY_CODE_PGUP:  pin = S5L8940_GPIO_BTN_VOLUP; break;
+        default: break;
+        }
+    }
+    if (pin < 0) {
+        return;
+    }
+    s->kbd_btn_held[q] = down ? pin + 1 : 0;
+    n94_set_button(s, pin, down);
+}
+
+static const QemuInputHandler n94_kbd_handler = {
+    .name  = "iPhone 4S Buttons",
+    .mask  = INPUT_EVENT_MASK_KEY,
+    .event = n94_kbd_event,
+};
+
+/*
+ * The panel's slow adaptive clocking block (mipi-dsim reg[1], 0x3F110000, sac-version 1; the
+ * sacm node's "saca" function 'lcd0'). AppleSamsungMIPIDSIController and the sacm manager write
+ * +0x24/+0x20 (the clock step) and +0x00 <- 0x10000001, then spin with no timeout until +0x00
+ * bit 8 (ready) reads set before writing 0x10000003. The first boot finds the link as iBoot
+ * left it and never waits; every panel power-on after an auto-lock does, and on the unimplemented
+ * window it hung the kernel with the LCD on and the screen black. A register file whose +0x00
+ * always reads ready.
+ */
+#define N94_SAC_READY 0x100
+
+static uint64_t n94_sac_read(void *opaque, hwaddr addr, unsigned size)
+{
+    uint32_t *regs = opaque;
+
+    return regs[addr >> 2] | (addr == 0 ? N94_SAC_READY : 0);
+}
+
+static void n94_sac_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+{
+    uint32_t *regs = opaque;
+
+    regs[addr >> 2] = val;
+}
+
+static const MemoryRegionOps n94_sac_ops = {
+    .read = n94_sac_read,
+    .write = n94_sac_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
 
 static void n94_init(MachineState *machine)
 {
@@ -451,11 +626,37 @@ static void n94_init(MachineState *machine)
         sysbus_realize_and_unref(sbd, &error_fatal);
         sysbus_mmio_map(sbd, 0, S5L8940_DSIM_BASE);
         sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_DSIM));
+        memory_region_init_io(&s->sac, OBJECT(s), &n94_sac_ops, s->sac_regs, "n94.sac",
+                              sizeof(s->sac_regs));
+        memory_region_add_subregion(sysmem, S5L8940_SAC_BASE, &s->sac);
 
         /* The two DARTs AppleS5L8930XDART programs at boot (jpeg/scaler, isp). */
         sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_NRT_BASE, NULL);
         sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_RT_BASE, NULL);
     }
+
+    /*
+     * spi1 and the multitouch digitizer on it: the A4 SPI block (AppleSamsungSPI drives the same
+     * Samsung IP) and the N1 model the N90 and N81 use, with the N94's sensor profile. The kernel
+     * sends N94.mtprops' N1F56 firmware (56264 bytes) in one CDMA burst into TXDATA, so the TX FIFO
+     * holds 64 KiB. ATN interrupts on GPIO 0x15; its reset (0x407) and the PMU's LDOs are not
+     * modeled (the digitizer is always powered).
+     */
+    dev = qdev_new(TYPE_IPOD_TOUCH_SPI);
+    qdev_prop_set_uint8(dev, "index", 1);
+    qdev_prop_set_string(dev, "peripheral", "multitouch");
+    qdev_prop_set_uint32(dev, "tx-fifo-depth", 0x10000);
+    sbd = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, S5L8940_SPI_BASE(1));
+    sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_SPI(1)));
+    s->mt = IPOD_TOUCH_SPI(dev)->mt;
+    s->mt->profile = &mt_profile_n94;
+    qdev_connect_gpio_out_named(DEVICE(s->mt), "atn", 0,
+                                qdev_get_gpio_in(s->gpio, S5L8940_GPIO_MT_ATN));
+    qemu_add_mouse_event_handler(n94_mouse_event, s->mt, 1, "iPhone 4S Touchscreen");
+    qemu_input_handler_register(s->gpio, &n94_kbd_handler);
+    qemu_input_handler_register(s->gpio, &n94_mtt_handler);
 
     /*
      * Samsung UARTs, the four the N94 device tree has: uart0 is the kernel's
