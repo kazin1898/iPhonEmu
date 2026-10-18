@@ -419,7 +419,7 @@ def build_helper(system_blocks, out_dir, clang=None, lld=None, src=SRC, keep=Fal
     out = os.path.join(out_dir, "it_install")
     with open(out, "wb") as f:
         f.write(macho)
-    info = {"source": os.path.relpath(src, out_dir), "code_bytes": len(code), "macho_bytes": len(macho),
+    info = {"source": rel_path(src, out_dir), "code_bytes": len(code), "macho_bytes": len(macho),
             "entry": "0x%x" % entry, "sha256": hashlib.sha256(macho).hexdigest(),
             "system_blocks": system_blocks, "system_lba": SYSTEM_LBA, "clang": clang,
             "var_skeleton": len(skeleton)}
@@ -445,7 +445,7 @@ def build_keybag_helper(out_dir, clang=None, lld=None, src=KEYBAG_SRC, keep=Fals
     out = os.path.join(out_dir, "it_keybag")
     with open(out, "wb") as f:
         f.write(macho)
-    info = {"source": os.path.relpath(src, out_dir), "code_bytes": len(text[0][2]), "data_bytes": data[0][3],
+    info = {"source": rel_path(src, out_dir), "code_bytes": len(text[0][2]), "data_bytes": data[0][3],
             "macho_bytes": len(macho), "entry": "0x%x" % entry, "dyld": DYLD, "dylib": LIBSYSTEM,
             "binds": {sym: "0x%x" % addr for addr, sym in binds}, "sha256": hashlib.sha256(macho).hexdigest(),
             "slot": KEYBAG_SLOT, "clang": clang}
@@ -475,16 +475,21 @@ def make_install_ramdisk(stock, out, helpers, grow_blocks=512):
             "sha256": hashlib.sha256(open(out, "rb").read()).hexdigest()}
 
 
+def rel_path(path, start):
+    """path relative to start, or absolute when they are on different drives (Windows): a device's store
+    may be on another drive than the firmware it serves (the model takes either)."""
+    try:
+        return os.path.relpath(os.path.abspath(path), os.path.abspath(start))
+    except ValueError:
+        return os.path.abspath(path)
+
+
 def write_markers(store_dir, rootfs, extra_sources=()):
     """markers.json in the page store directory: source 0 is the system volume image."""
     size = os.path.getsize(rootfs)
     if size % BLOCK:
         raise SystemExit(f"{rootfs}: {size} bytes is not a whole number of 4 KiB blocks")
-    try:
-        rel = os.path.relpath(os.path.abspath(rootfs), os.path.abspath(store_dir))
-    except ValueError:      # another drive (Windows): the model takes an absolute path as it is
-        rel = os.path.abspath(rootfs)
-    rel = rel.replace(os.sep, "/")
+    rel = rel_path(rootfs, store_dir).replace(os.sep, "/")
     sources = [{"path": rel, "bytes": size, "what": "system volume (HFSX)"}] + list(extra_sources)
     path = os.path.join(store_dir, "markers.json")
     with open(path, "w") as f:

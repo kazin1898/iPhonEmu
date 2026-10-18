@@ -10,6 +10,9 @@
   ios_prep.py install   DIR --nand NAND --out OUT  the install boot: it_install and it_keybag built for this
                         rootfs, markers.json in the store, the restore ramdisk with the helpers (docs/n94/README.md)
   ios_prep.py inventory DIR [--docs DOCS]          device-tree dump and the kernelcache's kext list
+  ios_prep.py device create NAME --ipsw IPSW [--storage 16G]   a virtual unit, IPSW to installed in one go
+  ios_prep.py device boot|refresh|delete NAME / device list    use it, re-run its install boot, remove it
+                        (--root DIR or IPHONEMU_DEVICES: where the units live; docs/n94/README.md)
 
 Needs the build's keys: --keys JSON, else the cache keys_<build>_<device>.json beside the IPSW, else
 The Apple Wiki (keys.py). Runs on Windows, macOS and Linux with Python 3 and `cryptography`.
@@ -150,7 +153,7 @@ def build_kboot(out_dir, args, ip=None):
     iboot_path = os.path.join(out_dir, "iBoot.bin")
     iboot = read(iboot_path) if os.path.exists(iboot_path) else None
     board = kboot.board_of(DeviceTree(dtb))
-    ident = load_identity(out_dir, args.seed, board)
+    ident = load_identity(getattr(args, "identity_dir", None) or out_dir, args.seed, board)
     boot_args = args.boot_args or kboot.DEFAULT_BOOT_ARGS
     if args.verbose_boot and "-v" not in boot_args.split():
         boot_args += " -v"
@@ -170,7 +173,8 @@ def build_kboot(out_dir, args, ip=None):
     with open(os.path.splitext(out)[0] + ".json", "w") as f:
         json.dump(info, f, indent=2, default=lambda v: "0x%x" % v if isinstance(v, int) else v)
     log(f"kboot.bin: {len(blob)} bytes, load 0x{load_pa:08x} entry 0x{entry:08x} boot_args 0x{ba_pa:08x} "
-        f"(Version {info['boot_args_version']}, {args.cpus} cpu(s), nand={args.nand}"
+        f"(Version {info['boot_args_version']}, {args.cpus} cpu(s), "
+        + (f"nand=ppn {nand_ppn.raw_bytes(args.nand) >> 30} GiB" if isinstance(args.nand, dict) else f"nand={args.nand}")
         + (f", ramdisk {args.ramdisk} at 0x{info['ramdisk'][0]:08x})" if info.get("ramdisk") else ")"))
     return out, info
 
@@ -257,8 +261,7 @@ def cmd_prepare(args):
         else:
             hfs, info = expand_rootfs(ip, keys, out, keep_dmg=args.keep_dmg)
             hashes["rootfs"] = info
-        if not args.stock_lockdownd:
-            hashes["activation"] = activation_shortcut(os.path.join(out, "rootfs.hfs"))
+        hashes.update(firmware_edits(os.path.join(out, "rootfs.hfs"), args))
     write_inventory(out, args.docs)
     build_kboot(out, args, ip)
     for name in ("kernelcache.mach", "DeviceTree.bin", "iBoot.bin", "kboot.bin", "rootfs.hfs"):
@@ -268,6 +271,22 @@ def cmd_prepare(args):
     with open(os.path.join(out, "hashes.json"), "w") as f:
         json.dump(hashes, f, indent=2)
     log("done")
+
+
+def firmware_edits(rootfs, args):
+    """What every unit made from this system volume needs, on rootfs.hfs (per firmware, so once for all
+    of them), each idempotent: lockdownd's activation short-circuit (unless --stock-lockdownd) and the
+    launchd jobs of sysvol.UNIT_EDITS, the M3 edits (unless --stock-jobs). Returns hashes.json's record."""
+    import sysvol
+    rec = {}
+    if not getattr(args, "stock_lockdownd", False):
+        rec["activation"] = activation_shortcut(rootfs)
+    if not getattr(args, "stock_jobs", False):
+        changed = sysvol.unit_edits(rootfs)
+        rec["unit_edits"] = [f"{', '.join(jobs)}: {kw}" for jobs, kw in sysvol.UNIT_EDITS]
+        log("launchd jobs: " + (f"{', '.join(changed)} edited" if changed else "already as every unit needs them")
+            + " (CA_ENABLE_OGL=0 for backboardd and SpringBoard, BTServer and BlueTool disabled)")
+    return rec
 
 
 def activation_shortcut(rootfs):
@@ -286,15 +305,36 @@ def activation_shortcut(rootfs):
 
 
 def cmd_kboot(args):
+    if args.nand_store:
+        args.nand = store_geometry(args.nand_store)
     build_kboot(args.dir, args)
 
 
+def store_geometry(store):
+    """A page store's geometry.json: what the kernel's device tree must say for that store."""
+    with open(os.path.join(store, "geometry.json")) as f:
+        return json.load(f)
+
+
 def cmd_nand(args):
-    path = nand_ppn.write_store(args.out, ptab_only=args.ptab_only)
-    log(f"PPN page store: {path} ({nand_ppn.PPN['channels']}x{nand_ppn.PPN['ce_per_channel']} CEs, "
-        f"{nand_ppn.PPN['caus_per_ce']} CAUs x {nand_ppn.PPN['blocks_per_cau']} blocks x "
-        f"{nand_ppn.PPN['pages_per_block']} x {nand_ppn.PPN['page_bytes']} B), the partition table in the boot "
-        f"blocks: " + ", ".join(f"{n}:{a}:{b}" for n, t, a, b, fl in nand_ppn.partition_specs()))
+    g = nand_ppn.geometry(storage_gib(args.storage))
+    if args.ptab_only:
+        with open(os.path.join(args.out, "geometry.json")) as f:
+            g = json.load(f)
+    path = nand_ppn.write_store(args.out, g, ptab_only=args.ptab_only)
+    log(f"PPN page store: {path}, {nand_ppn.raw_bytes(g) >> 30} GiB ({g['channels']}x{g['ce_per_channel']} CEs, "
+        f"{g['caus_per_ce']} CAUs x {g['blocks_per_cau']} blocks x "
+        f"{g['pages_per_block']} x {g['page_bytes']} B), the partition table in the boot "
+        f"blocks: " + ", ".join(f"{n}:{a}:{b}" for n, t, a, b, fl in nand_ppn.partition_specs(g)))
+    if g != nand_ppn.PPN:
+        log("a store of this size boots with a kboot.bin built for it: kboot ... --nand ppn --nand-store " + args.out)
+
+
+def storage_gib(text):
+    try:
+        return nand_ppn.parse_storage(text)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
 
 def cmd_install(args):
@@ -356,10 +396,213 @@ def cmd_inventory(args):
         print("%-22s %-40s %s  irq %s" % r)
 
 
+# ---- virtual devices (device.py) ----------------------------------------------------------------------
+
+DEFAULT_SEED = "iPhonEmu n94 dev1"
+
+
+def firmware_ready(fw):
+    return all(os.path.exists(os.path.join(fw, n))
+               for n in ("hashes.json", "kernelcache.mach", "DeviceTree.bin", "rootfs.hfs"))
+
+
+def ensure_firmware(args, ip):
+    """The prepared firmware directory for this IPSW, shared by every device made from it: prepared now if
+    it is not there, else checked against the IPSW and given the per-firmware edits it may lack."""
+    import device
+    fw = os.path.abspath(args.firmware or device.default_firmware(ip.board, ip.build))
+    if not firmware_ready(fw):
+        log(f"firmware: preparing {fw} from {os.path.basename(args.ipsw)}")
+        cmd_prepare(argparse.Namespace(
+            ipsw=args.ipsw, out=fw, keys=args.keys, skip_rootfs=False, redo_rootfs=False, keep_dmg=False,
+            stock_lockdownd=args.stock_lockdownd, stock_jobs=args.stock_jobs, docs=None, cpus=1, nand="ppn",
+            boot_args=None, verbose_boot=False, add_boot_arg=None, hide=None, ramdisk=None, ramdisk_file=None,
+            bundle=None, seed=DEFAULT_SEED))
+        return fw
+    with open(os.path.join(fw, "hashes.json")) as f:
+        want = json.load(f).get("ipsw", {}).get("sha256")
+    log(f"firmware: {fw} is prepared; checking it is this IPSW's")
+    have = sha256_file(args.ipsw)
+    if want and want != have:
+        raise SystemExit(f"{fw} was prepared from another IPSW (sha256 {want[:16]}..., this one {have[:16]}...): "
+                         "pass --firmware DIR for a directory of its own")
+    firmware_edits(os.path.join(fw, "rootfs.hfs"), args)
+    return fw
+
+
+def device_kboot(dev, fw, meta, install):
+    """dev's bundle for the install boot (the install ramdisk as root, the FTL allowed to format a blank
+    store, the AE2 hidden) or for the normal boot, built for dev's geometry and with dev's identity."""
+    return build_kboot(fw, argparse.Namespace(
+        cpus=1, nand=store_geometry(dev.nand), boot_args=None, verbose_boot=False, seed=meta["seed"],
+        identity_dir=dev.dir, ipsw=None, keys=None,
+        add_boot_arg=["nand-enable-reformat=1"] if install else None,
+        hide=["arm-io/ae2"] if install else None,
+        ramdisk="restore" if install else None,
+        ramdisk_file=os.path.join(dev.install, "ramdisk-install.dmg") if install else None,
+        bundle=os.path.join(dev.install, "kboot.bin") if install else dev.kboot))
+
+
+def install_device(dev, fw, meta, args):
+    """The install boot, start to finish: helpers and markers for this store, the install bundle, the boot
+    until "it_install: done", then the normal bundle. The device is "ready" only after all of it."""
+    import device
+    meta["state"] = "installing"
+    dev.save(meta)
+    cmd_install(argparse.Namespace(dir=fw, nand=dev.nand, out=dev.install, ipsw=meta.get("ipsw"),
+                                   keys=getattr(args, "keys", None), clang=args.clang, lld=args.lld,
+                                   activation="factory"))
+    device_kboot(dev, fw, meta, install=True)
+    limit = args.limit or 1200 + 150 * meta["storage_gib"]
+    log(f"install boot of {dev.name!r}: up to {limit} s (logs in {dev.logs})")
+    result, secs = device.run_install_boot(dev, limit, log=log)
+    meta.setdefault("installs", []).append({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "seconds": round(secs),
+                                            "result": result or f"no result in {limit} s"})
+    if not result or device.DONE not in result:
+        meta["state"] = "failed"
+        dev.save(meta)
+        raise SystemExit(f"install boot of {dev.name!r}: {result or 'no it_install result'} after {secs:.0f} s; "
+                         f"serial log {os.path.join(dev.logs, 'install-serial.log')}")
+    log(f"install boot: done in {secs:.0f} s")
+    device_kboot(dev, fw, meta, install=False)
+    meta["state"] = "ready"
+    dev.save(meta)
+
+
+def cmd_device_create(args):
+    import device
+    import secrets
+    dev = device.Device(args.root, args.name)
+    if dev.exists():
+        raise SystemExit(f"device {args.name!r} already exists in {dev.dir} (device delete {args.name} first)")
+    if os.path.isdir(dev.dir) and os.listdir(dev.dir):
+        raise SystemExit(f"{dev.dir} exists and is not a device: pick another name or --root")
+    gib = storage_gib(args.storage)
+    ip = IPSW(args.ipsw)
+    if ip.board.lower() != "n94ap":
+        raise SystemExit(f"{os.path.basename(args.ipsw)}: {ip.product} ({ip.board}); devices are the iPhone 4S "
+                         "(n94ap) for now")
+    fw = ensure_firmware(args, ip)
+    os.makedirs(dev.dir, exist_ok=True)
+    meta = {"name": args.name, "created": time.strftime("%Y-%m-%d %H:%M:%S"), "product": ip.product,
+            "board": ip.board, "version": ip.version, "build": ip.build, "firmware": fw,
+            "ipsw": os.path.abspath(args.ipsw), "storage_gib": gib, "seed": f"device {secrets.token_hex(8)}",
+            "state": "new"}
+    dev.save(meta)
+    g = nand_ppn.geometry(gib)
+    nand_ppn.write_store(dev.nand, g)
+    log(f"store: {dev.nand}, {gib} GiB raw ({g['blocks_per_cau']} blocks per CAU), sparse on the host")
+    install_device(dev, fw, meta, args)
+    log(f"device {args.name!r} is ready: ios_prep.py device boot {args.name}"
+        + ("" if os.path.abspath(args.root) == os.path.abspath(device.default_root()) else f" --root {args.root}"))
+
+
+def cmd_device_refresh(args):
+    """The install boot again on an installed store: the markers rewritten (after a firmware edit, which
+    pages the FTL had moved would not follow), the data volume and its keybag kept."""
+    import device
+    dev = device.Device(args.root, args.name)
+    meta = dev.load()
+    install_device(dev, meta["firmware"], meta, args)
+
+
+def cmd_device_boot(args):
+    import device
+    dev = device.Device(args.root, args.name)
+    meta = dev.load()
+    if meta.get("state") != "ready":
+        raise SystemExit(f"device {args.name!r} is {meta.get('state')}, not ready: device refresh {args.name} "
+                         "re-runs its install boot")
+    extra = args.qemu_args
+    log(f"booting {args.name!r} ({meta['product']} {meta['version']} {meta['build']}, {meta['storage_gib']} GiB); "
+        f"serial log {os.path.join(dev.logs, 'serial.log')}"
+        + (f"; QMP on {args.qmp} and {args.qmp + 1} (tools/dev/n94_input.py --port)" if args.qmp else ""))
+    rc = device.boot(dev, display=args.display, qmp=args.qmp, extra=extra, detach=args.detach)
+    log(f"QEMU pid {rc}, detached" if args.detach else f"QEMU exit {rc}")
+
+
+def cmd_device_list(args):
+    import device
+    devs = device.list_devices(args.root)
+    if not devs:
+        print(f"no devices under {os.path.abspath(args.root)}")
+        return
+    print(f"{'NAME':20s} {'MODEL':10s} {'iOS':16s} {'STORAGE':8s} {'STATE':11s} {'QEMU':8s} PATH")
+    for dev in devs:
+        m = dev.load()
+        pid = dev.running()
+        print(f"{dev.name:20s} {m.get('product', '?'):10s} {m.get('version', '?') + ' ' + m.get('build', ''):16s} "
+              f"{str(m.get('storage_gib', '?')) + ' GiB':8s} {m.get('state', '?'):11s} {str(pid or '-'):8s} {dev.dir}")
+
+
+def cmd_device_delete(args):
+    import device
+    dev = device.Device(args.root, args.name)
+    meta = dev.load()
+    if not args.yes:
+        if not sys.stdin.isatty():
+            raise SystemExit(f"delete {args.name!r} ({dev.dir}): pass --yes to confirm")
+        answer = input(f"delete device {args.name!r} ({meta.get('storage_gib')} GiB, {dev.dir})? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            raise SystemExit("left as it is")
+    device.remove(dev)
+    log(f"device {args.name!r} deleted ({dev.dir}); the firmware {meta.get('firmware')} stays for the others")
+
+
+def add_device_parsers(sub):
+    import device
+    p = sub.add_parser("device", help="virtual devices: create, boot, refresh, list, delete (docs/n94/README.md)")
+    dsub = p.add_subparsers(dest="device_cmd", required=True)
+
+    def parser(name, help):
+        q = dsub.add_parser(name, help=help)
+        q.add_argument("--root", default=device.default_root(),
+                       help="where the devices live (default: IPHONEMU_DEVICES, else devices/ beside the repository)")
+        return q
+
+    def install_opts(q):
+        q.add_argument("--limit", type=int, help="seconds the install boot may take (default 1200 + 150 per GiB)")
+        q.add_argument("--clang", help="clang for the install helpers (default: PATH, then the workspace UCRT64)")
+        q.add_argument("--lld", help="ld.lld to use")
+
+    q = parser("create", "a new device: its store, the install boot, ready to boot")
+    q.add_argument("name")
+    q.add_argument("--ipsw", required=True)
+    q.add_argument("--storage", default="16G",
+                   help="raw NAND size: " + ", ".join(f"{n}G" for n in nand_ppn.STORAGE_GIB) + " (default 16G; the "
+                        "4S was sold with 16, 32 and 64 GB; the store is sparse and grows as the guest writes)")
+    q.add_argument("--firmware", help="the prepared firmware directory (default: firmware/<board>_<build> beside "
+                                      "the repository, prepared from the IPSW when not there)")
+    q.add_argument("--keys", help="keys JSON (else cached beside the IPSW, else The Apple Wiki)")
+    q.add_argument("--stock-lockdownd", action="store_true", help="as for prepare: no activation short-circuit")
+    q.add_argument("--stock-jobs", action="store_true", help="as for prepare: no M3 launchd edits")
+    install_opts(q)
+    q.set_defaults(fn=cmd_device_create)
+    q = parser("refresh", "the install boot again (markers rewritten, data volume kept)")
+    q.add_argument("name")
+    install_opts(q)
+    q.set_defaults(fn=cmd_device_refresh)
+    q = parser("boot", "boot a ready device")
+    q.add_argument("name")
+    q.add_argument("--display", default="sdl", help="QEMU -display (default sdl, the panel in a window; none)")
+    q.add_argument("--qmp", type=int, default=4444,
+                   help="QMP on this TCP port and the next (tools/dev/n94_input.py; default 4444, 0 for none)")
+    q.add_argument("--detach", action="store_true", help="return once QEMU has started")
+    q.set_defaults(fn=cmd_device_boot)     # more QEMU arguments after a lone --
+    q = parser("list", "the devices and their state")
+    q.set_defaults(fn=cmd_device_list)
+    q = parser("delete", "remove a device's directory (its store); the firmware stays")
+    q.add_argument("name")
+    q.add_argument("--yes", action="store_true", help="no confirmation question")
+    q.set_defaults(fn=cmd_device_delete)
+
+
 def add_kboot_opts(p):
     p.add_argument("--cpus", type=int, choices=(1, 2), default=1, help="cores visible to the kernel (default 1)")
     p.add_argument("--nand", choices=("raw", "ppn"), default="raw",
                    help="disk node geometry: raw A4-style NAND for the h2fmi model (default) or PPN")
+    p.add_argument("--nand-store", metavar="DIR",
+                   help="PPN with this page store's geometry.json (a store not of the default 8 GiB)")
     p.add_argument("--boot-args", help="kernel boot-args (default: %s)" % kboot.DEFAULT_BOOT_ARGS)
     p.add_argument("--verbose-boot", action="store_true", help="append -v (text console on the panel)")
     p.add_argument("--add-boot-arg", action="append", metavar="ARG",
@@ -369,7 +612,7 @@ def add_kboot_opts(p):
                    help="stage the IPSW's restore or update ramdisk as the root (rd=md0): launchd with no NAND")
     p.add_argument("--ramdisk-file", metavar="IMAGE", help="stage this raw HFS+ image instead of the IPSW's ramdisk")
     p.add_argument("--bundle", metavar="FILE", help="write the bundle here instead of DIR/kboot.bin (and its .json)")
-    p.add_argument("--seed", default="iPhonEmu n94 dev1", help="identity seed (serial, ECID, MACs)")
+    p.add_argument("--seed", default=DEFAULT_SEED, help="identity seed (serial, ECID, MACs)")
     p.add_argument("--docs", help="also copy devicetree.txt/kexts.txt/iomap.tsv into this directory")
 
 
@@ -389,6 +632,9 @@ def main():
     p.add_argument("--stock-lockdownd", action="store_true",
                    help="leave lockdownd as the IPSW has it (by default it takes its activation short-circuit, "
                         "lockdownd_patch.py, so a new unit gets past Setup's activation page)")
+    p.add_argument("--stock-jobs", action="store_true",
+                   help="leave the launchd jobs as the IPSW has them (by default backboardd and SpringBoard get "
+                        "CA_ENABLE_OGL=0 and BTServer/BlueTool are disabled, sysvol.UNIT_EDITS)")
     add_kboot_opts(p)
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser("kboot")
@@ -399,6 +645,8 @@ def main():
     p.set_defaults(fn=cmd_kboot)
     p = sub.add_parser("nand", help="write a blank PPN page store (geometry.json) for -M iPhone-4S,nand=DIR")
     p.add_argument("--out", required=True)
+    p.add_argument("--storage", default="8G", help="raw size, " + ", ".join(f"{n}G" for n in nand_ppn.STORAGE_GIB)
+                   + " (default 8G; another size needs a kboot.bin built with --nand-store)")
     p.add_argument("--ptab-only", action="store_true",
                    help="rewrite only the partition table (boot block) of an existing store, keeping its FTL")
     p.set_defaults(fn=cmd_nand)
@@ -442,7 +690,12 @@ def main():
                         "needs it, a seeded FactoryActivated does not hold there); fails closed on another binary")
     p.add_argument("--show", action="store_true", help="print the jobs as they are, change nothing")
     p.set_defaults(fn=cmd_sysvol)
-    args = ap.parse_args()
+    add_device_parsers(sub)
+    argv, extra = sys.argv[1:], []
+    if "--" in argv:
+        argv, extra = argv[:argv.index("--")], argv[argv.index("--") + 1:]
+    args = ap.parse_args(argv)
+    args.qemu_args = extra
     args.fn(args)
 
 

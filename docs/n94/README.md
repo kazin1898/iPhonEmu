@@ -55,6 +55,105 @@ without `--nand ppn`, since with the NVRAM on the NAND the kernel must read it f
   `AppleInterruptController::start` blocks in `IOCPUInterruptController::registerInterrupt` forever and no
   device interrupt is ever unmasked.
 
+`prepare` also makes the system-volume edits that every unit needs. These are per firmware, so every
+device made from this IPSW shares them. Each edit is idempotent, and an image that already has an edit
+is not opened for writing:
+
+- lockdownd's activation short-circuit ("Activation" below; `--stock-lockdownd` leaves it out).
+- The M3 launchd edits, `sysvol.UNIT_EDITS` (`--stock-jobs` leaves them out): `CA_ENABLE_OGL=0` for
+  backboardd and SpringBoard, and BTServer and BlueTool disabled.
+
+## Virtual devices: IPSW to a usable unit in one command
+
+`ios_prep.py device` chains the flow of B1-B4, M3 and Activation below, so there are no hand-run steps.
+A *device* is a directory with its own PPN page store, a storage size chosen at creation, a random
+identity seed (serial, ECID, MACs), and kboot bundles built for that store's geometry. The firmware
+directory is shared: every device made from one IPSW serves the same `rootfs.hfs` read-only through marker
+pages, so a device costs only the pages it writes. From the workspace root (the folder holding `iPhonEmu/`,
+`firmware/` and the `.venv`):
+
+```
+python iPhonEmu/tools/ios-prep/ios_prep.py device create meu4s --ipsw firmware/iPhone4,1_6.1.3_10B329_Restore.ipsw --storage 16G
+python iPhonEmu/tools/ios-prep/ios_prep.py device boot meu4s            # SDL window, QMP on 4444/4445
+python iPhonEmu/tools/ios-prep/ios_prep.py device list
+python iPhonEmu/tools/ios-prep/ios_prep.py device delete meu4s          # asks; --yes does not
+```
+
+`--root DIR` (or `IPHONEMU_DEVICES`) says where the devices live. The default is `devices/` beside the
+repository. Each command takes it.
+
+`device create NAME --ipsw IPSW [--storage 16G] [--firmware DIR]`:
+
+1. **Firmware.** Uses `firmware/<board>_<build>` beside the repository (`n94_10B329`), or `--firmware`.
+   If that directory is not prepared, it runs `prepare` (edits included). If it is prepared, the command
+   checks it against the IPSW's SHA-256 (`hashes.json`) and applies any per-firmware edits it lacks.
+2. **Store.** `<root>/NAME/nand`, of `--storage` raw size: 2, 4, 8, 16, 32 or 64 GiB (default 16G; the
+   4S was sold with 16, 32 and 64 GB, and 8 GB came in 2013). The size scales the blocks per CAU
+   (`nand_ppn.geometry`: 2048 at 8 GiB, block_bits to match), with the same two chips and the same
+   partition table layout. The chip files are sparse and grow as the guest writes.
+3. **Install boot.** `install` for this store (helpers, markers, install ramdisk, the factory data ark),
+   a bundle with this store's geometry and the device's identity (install ramdisk as root,
+   `nand-enable-reformat=1`, AE2 hidden), and QEMU until `it_install: done`. QEMU is then quit through
+   the monitor on a stdin pipe, as `run-install.sh` did. `FAIL`, a kernel panic or the time limit (`--limit`,
+   default 1200 s + 150 s per GiB) marks the device `failed` and points at its serial log.
+4. **Normal bundle.** `<root>/NAME/kboot.bin`, the same geometry and identity, AE2 shown. `device.json`
+   says `ready`.
+
+`device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [-- QEMU ARGS]` runs `-M
+iPhone-4S,kboot=<dev>/kboot.bin,nand=<dev>/nand`, with the serial log in `<dev>/logs/serial.log`. It
+opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh` does. On the devices measured below, the first boot showed Setup's welcome screen within 4 minutes (M3's
+first boot had a 14-minute data migration first). Setup goes on to the home screen with no activation
+page ("Activation").
+
+`device refresh NAME` repeats the install boot on an installed store. The markers are written again and
+the data volume and keybag are kept. A device needs this after a later edit to its firmware's
+`rootfs.hfs`, because the FTL's garbage collection copies served pages and those copies do not follow
+the edit ("M3", item 4).
+
+`device delete NAME` removes `<root>/NAME` and nothing else: the directory must hold a `device.json`
+and sit directly under the root. The firmware stays for the other devices.
+
+Two devices coexist. They have different stores and identities and use the same firmware directory, and
+they can run at the same time if their QMP ports differ. Each running QEMU holds `<dev>/qemu.lock` with
+its PID. `boot`, `refresh` and `delete` refuse a device whose QEMU is alive. That enforces one QEMU per
+store, which the page files' own locking does not on Windows.
+
+Layout of `<root>/NAME`: `device.json` (firmware, IPSW, size, seed, state, install history), `nand/`
+(`geometry.json`, `ch*-ce0.pages`, `markers.json`, with an absolute `rootfs.hfs` path when the store is
+on another drive), `install/` (`it_install`, `it_keybag`, `ramdisk-install.dmg`, `kboot.bin`),
+`kboot.bin` with its `.json`, `identity.json`, `logs/`. Lower-level commands for a store of another size:
+`nand --out DIR --storage 4G`, then `kboot ... --nand ppn --nand-store DIR`.
+
+Measured on 2026-10-18 (stores on E:, firmware on C:, two `create` runs in parallel):
+
+| | 4 GiB device (`t4`) | 16 GiB device (`t16`) |
+|---|---|---|
+| FTL block device | 976,563 sectors | 3,906,250 sectors |
+| Install boot | 63-72 s (a blank store formats in seconds) | 88 s |
+| On the host | 1.5 GB (the marker pages are whole pages) | 1.5 GB |
+
+Both then booted at the same time (`--qmp 4544` and `--qmp 4644`, `--display none`). Each showed Setup's
+welcome screen ("iPhone", slide to set up) within 4 minutes, auto-locking until a Home press. With both
+running, `device delete t4` and a second `device boot t4` were refused. `device refresh t4` took 185 s
+("already installed", the system keybag left as it was), and `device delete t4 --yes` removed only
+`t4`. Setup was not walked to the home screen on these devices. The activation patch they get is the one
+M4 walked, on the same firmware directory.
+
+Not automated yet:
+
+- Only the iPhone 4S (n94ap) on 10B329 has been walked. `create` refuses other boards. Another 4S build
+  would need its own keys, and possibly lockdownd patch sites and launchd edits of its own.
+- Setup Assistant is walked by hand, by mouse in the SDL window or `n94_input.py`: language, country,
+  Location Services, set up as new, Apple ID skipped, terms, diagnostics.
+- The first boot and Setup happen at the first `device boot`, not in `create`.
+- QEMU must already be built (`build/qemu-system-arm`). On Windows the MSYS2 UCRT64 DLLs come from the
+  workspace's `toolchain/msys64/ucrt64/bin`.
+- The install helpers need clang and ld.lld (UCRT64's are found; `--clang`/`--lld` otherwise).
+- Nothing reaches the network, Wi-Fi or Bluetooth (no models). These were already missing before this
+  command.
+- No snapshot or reset of a device's data volume short of `delete` + `create`.
+- The future `iPhonEmu.exe` front end (phase 7) is not written. It would call these commands.
+
 ## Booting
 
 From the repository root (the Windows build is `build/qemu-system-arm.exe`, run from the MSYS2 UCRT64
@@ -236,7 +335,9 @@ python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn
 build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=../runs/n94/nand     -serial file:../runs/n94/m3-serial.log -display sdl -monitor stdio
 ```
 
-The normal boot no longer hides `arm-io/ae2` (the install boot still does). `screendump FILE.ppm` in the
+The two `sysvol` edits are now made by `prepare` itself ("Preparing the firmware"), and `device create`
+runs the whole sequence ("Virtual devices"). The normal boot no longer hides `arm-io/ae2` (the install
+boot still does). `screendump FILE.ppm` in the
 monitor saves the panel; `runs/n94/run-m3.sh SECS` (outside the repository) takes one every 30 s. With no
 touch the panel goes dark after about two minutes (auto-lock). What it took, in order:
 
