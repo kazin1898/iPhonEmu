@@ -104,7 +104,7 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
   `AppleCDMA`: no CDMA model, no launchd. (IOFlashStorage, AppleEffaceableStorage and AppleKeyStore carry
   the string too.)
 - **The IOPs**: `AppleA5IOP` and `A5AE2` start their EmbeddedIOP firmware (`s5l8940xiop-RELEASE`,
-  `s5l8940xae2-RELEASE`, iBoot-1537.9.55) and wait for it; hidden until the IOP core model exists.
+  `s5l8940xae2-RELEASE`, iBoot-1537.9.55) and wait for it: both are modeled high-level now (`s5l8940_iop.c` B1, `s5l8940_ae2.c` M3).
 
 ## Platform blocks
 
@@ -113,7 +113,7 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
 | pmgr | 0x3F100000+0x7000; 0x38C00000, 0x38D00000, 0x38E00000, 0x38F00000, 0x3A500000, 0x3A600000 (+0x1000 each) | | `pmgr,s5l8940x` | **A4** `s5l8930_pmgr.c` with `gates` 0x78 (the A5 polls gate 0x44 at 0x1120 and pulses 0x5c; the A4 model's 0x40 gates read as zero there and the kernel spun forever) and `clkcfg-hi` (a second clock-config bank at 0x200-0x300 with the same busy bit). Still unmodeled: 0x38/0x3c, 0x1204, 0x2104/0x2108, 0x3100-0x3108. |
 | dwi | 0x3F700000, AIC 6 | 6 | `dwi,s5l8940x` | **new** (`AppleS5L8940XDWI`): single-wire PMU buck control; the A4's SWI (0xBF600000) plays the same role. |
 | iop | 0x3F300000 | 2 | `iop,s5l8940x`, `iop-version 1` | **new**: `AppleA5IOP` + `EmbeddedIOP-47.3` run `IOP_s5l8940xiop_firmware` (EmbeddedIOP iBoot-1537.9.55, 0x29000 bytes, Thumb-2). Not the A4 block: the control registers, the doorbells (AIC `IPID` functions) and the firmware's own use of the AIC are in "The IOP" below. A4 IOP is 0x86300000 + VICs at 0xBF300000. |
-| ae2 | 0x341E0000, 0x341E1000, 0x341A0000, 0x341C1000, 0x34000000+0x30000 | 97, 98 | `ae2,s5l8940x` | **new / hide**: audio engine (`AppleA5AE2`, `IOP_s5l8940xae2_firmware`). |
+| ae2 | 0x341E0000, 0x341E1000, 0x341A0000, 0x341C1000, 0x34000000+0x30000 | 97, 98 | `ae2,s5l8940x` | **new** `s5l8940_ae2.c` (high-level, M3): audio engine (`AppleA5AE2`, `IOP_s5l8940xae2_firmware`); section "The AE2". |
 | cdma | 0x37000000+0x2D000, 0x37800000+0x9000 (AES) | 51..94 | `cdma-version 3`, `max-channel 44` | **A4** `s5l8930_cdma.c` at the A5 bases (`dram-base`, `uart-base`, `paced-base` properties): channel n interrupts at 50+n; the model's 38 channels leave 39..44 in the unimplemented window. Its AES filter is what `CDMAAES`/`IOAESAccelerator` drive. |
 | sha2 | 0x30200000 | 38 | `sha,s5l8940x` | **new**: SHA-256 (A4 has SHA-1 at 0x80100000, `s5l8930_sha1.c`). |
 | pke | 0x33100000 | 17 | `pke-1,samsung` | **A4** `ipod_touch_pke.c` (0x83100000). |
@@ -459,6 +459,33 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
   progress bar, its boot overlay, and keeps it until the system app's first frame
   (`runs/n94/progress/2026-10-17_M3_primeiro-frame-logo.png`).
 
+## The AE2 (`AppleA5AE2-43.1`, EmbeddedIOP role AE2, M3 work 2026-10-18)
+
+Decoded from the 10B329 kexts (Ghidra; `AppleA5AE2::start` 0x8040148c, `startCPU` 0x80401b5c, its interrupt
+handler 0x804018b0) and the firmware image (`IOP_s5l8940xae2_firmware`, 420 KiB, `cnfg` at 0x50080, an
+iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks and the AAC codecs).
+
+- **Windows** (the ae2 node's reg, in the kext's order): 0x341E0000 the core's control block, 0x341E1000
+  its mailbox, 0x341A0000 a power/clock block, 0x341C1000 a configuration block, 0x34000000 192 KiB of
+  SRAM (`sram-available`; the kext saves and restores it around sleep). Interrupt 0 is AIC 97.
+- **startCPU**: control `+4` <- 0; power `+0` <- the `clock-dividers` word, then up to three polls of
+  `+0` bit 16 (busy); control `+8` <- the firmware's physical base (the image runs in place in the firmware
+  kext, 0x80b5d000); configuration `+0x14` <- 0x03ff01ff and `+0x34` <- 0x01000102 (ae2-version 1); control
+  `+4` <- 0x003f0003 (run; 0x00ff0003 for later versions, bit 8 for a wake source); mailbox `+8` <- 0x10,
+  then 0x20; the interrupt enabled. Power `+0x10..+0x20` <- 1 and back come first, from start.
+- **Doorbell and answer**: the AP rings with mailbox `+0x20` <- 0x10 (0x20 for its second source); the
+  interrupt handler writes mailbox `+0x24` <- 0x10 (acknowledge) and lets EmbeddedIOP walk the rings.
+- **Rings**: EmbeddedIOP's, as on the IOP (64-byte entries, item | ownership bit), at the AP's physical
+  addresses plus 0x40000000. The kext registers rings 0 (control, 2 entries), 2, 3, 4, 7 (2 each) and 5, 6
+  (3 each). Only control messages have come so far: 'nop ' at start and as a keepalive.
+- **Model** (`hw/arm/s5l8940_ae2.c`): those registers, the SRAM as RAM, the control endpoint answered as
+  the IOP's, every other endpoint's message traced (`-trace 's5l8940_ae2*'`, `ep%d item ...: 8 words`) and
+  handed back. That is enough for AppleAE2Audio's MCA (the I2S switch at 0x3FA01000, routes computed by the
+  AP and written there; still an unimplemented window), AppleCS42L63Audio and Highland Park to start.
+- **I2S**: AppleSamsungI2S (i2s-version 3) stops a port by writing `+0x00` <- 0x34 and spinning with
+  `IODelay(10)` until bit 1 (drained) is set: on the unimplemented window that pinned the CPU from the
+  codec's start on. The four ports are now the A4's `s5l8930_i2s.c` at 0x34190000 + n * 0x1000.
+
 ## Open points for the machine model
 
 1. ~~AIC register map~~: confirmed against the kext (section above). Still open in the model: which GLB_CFG
@@ -492,14 +519,9 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
    keybagd running) the same day. Open: the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
-9. **Audio, the M3 gate** (README "M3 work"): mediaserverd's audio session never comes up, and backboardd and
-   SpringBoard wait on it. On the A5 every audio route goes through the AE2 coprocessor: `ae2,s5l8940x`
-   (`AppleA5AE2`: registers at 0x341E0000/0x341E1000/0x341A0000/0x341C1000, 192 KiB of SRAM at 0x34000000,
-   AIC 97 and 98, firmware `IOP_s5l8940xae2_firmware`, an EmbeddedIOP with role AE2 whose endpoints serve
-   `AppleSongbird` and `AppleAE2Audio`), the I2S switch (`AppleAE2MCA` on `i2s-switch,s5l8940x`, 0x3FA01000),
-   then `AppleCS42L63Audio` on i2c0 0x4A and the Samsung I2S blocks. The AE2 firmware is the audio DSP (its
-   own task kernel, an "audio command" opcode set, AAC codecs). Options: (a) a high-level AE2 in the shape
-   of `s5l8940_iop.c` (the same EmbeddedIOP rings and control endpoint) that answers AppleAE2Audio's audio
-   commands and advances the stream clocks, with the CS42L63 register file from the cs42l58 model: the kexts'
-   protocol has to be read first, the larger part; (b) running the AE2 firmware itself on a second ARM core
-   with its SRAM, MCA and DMA modeled: more hardware, no protocol to guess.
+9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and
+   mediaserverd start. Open: no PCM reaches the host (no I2S DMA was seen; i2s0 has no "audio-out" yet), and
+   the AE2's audio endpoints (rings 2-7) have not carried a message yet, so their protocol is unread.
+10. **Marker pages and the FTL's GC**: a marker page the FTL moves becomes a copy of the bytes it was
+   served, so system-volume edits stop reaching the guest for the pages moved; the install boot rewrites
+   all markers. A page store that kept the logical page's marker through a GC copy would make this go away.

@@ -13,30 +13,30 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-45.5%25-orange) ![milestones](https://img.shields.io/badge/milestones-2%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-18-lightgrey)
+![overall](https://img.shields.io/badge/overall-49.4%25-orange) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-18-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
-Milestones: ✅ M1 serial console · ✅ M2 launchd and daemons · ⬜ M3 Setup / lock screen · ⬜ M4 home screen and apps. History: `docs/progress/history.md`. Figures are estimates of work done toward the
+Milestones: ✅ M1 serial console · ✅ M2 launchd and daemons · ✅ M3 Setup / lock screen · ⬜ M4 home screen and apps. History: `docs/progress/history.md`. Figures are estimates of work done toward the
 goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_map.py` regenerates this block.
 
 | Area | Progress | |
 |---|---|---|
 | System: Toolchain and Windows build | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | System: Firmware preparation (ios-prep) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
-| System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 88% |
+| System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
 | System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | 90% |
-| System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟩🟩🟨⬜⬜ | 75% |
+| System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 85% |
 | Processor and platform: Cortex-A9 core, TCG | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | 70% |
 | Processor and platform: Apple AIC and timers | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | 80% |
 | Processor and platform: PMGR clocks, GPIO, DWI, watchdog, PL310 | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |
 | Processor and platform: PMU D1881, I2C, sensors | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | 50% |
 | Processor and platform: DMA (CDMA) and crypto (AES, SHA, PKE) | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
 | Processor and platform: USB (OTG device, EHCI/OHCI, HSIC) | 🟩🟩🟩🟨⬜⬜⬜⬜⬜⬜ | 35% |
-| Video and input: Display pipe + CLCD + MIPI-DSI, 640x960 panel | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
+| Video and input: Display pipe + CLCD + MIPI-DSI, 640x960 panel | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 85% |
 | Video and input: GPU: GL bridge on Windows (ANGLE) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
 | Video and input: Multitouch (SPI) and buttons | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
-| Video and input: Audio (I2S, CS42L63, AE2) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Video and input: Audio (I2S, CS42L63, AE2) | 🟩🟩🟩🟨⬜⬜⬜⬜⬜⬜ | 35% |
 | Radios (stubs): Wi-Fi over HSIC, Bluetooth, baseband | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 10% |
 | Product: Speed: 1:1 with a real 4S on PC | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
 | Product: iPhonEmu.exe (open IPSW, prepare, boot) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |

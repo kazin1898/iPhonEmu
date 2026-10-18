@@ -11,7 +11,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 |---|---|---|---|
 | M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
 | M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot; B4 the same day: effaceable storage formatted and the system keybag created by the install boot, keybagd running (see "B4") |
-| M3 | Setup Assistant or the lock screen on the 640x960 panel | screenshot | in progress: the panel shows backboardd's boot overlay (2026-10-17); SpringBoard waits on mediaserverd, which waits on the AE2 audio path (see "M3 work") |
+| M3 | Setup Assistant or the lock screen on the 640x960 panel | `runs/n94/progress/2026-10-18_M3_setup-assistant.png` | **done** 2026-10-18: Setup Assistant's language list at 640x960 after 22 minutes of emulated boot (the AE2 audio path, the data volume's skeleton and protection; see "M3") |
 | M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
 
 ## Preparing the firmware
@@ -215,59 +215,65 @@ The normal boot with keybagd (`runs/n94/m2-root.log`, `run-m2.sh 420`):
   registered), the baseband's HSIC port times out as before.
 - 7 minutes, seven monitor samples `VM status: running`, no panic, no reboot.
 
-Next: M3 (the panel: AppleCLCD/MIPI-DSI with a framebuffer the display pipe draws, so backboardd and
-SpringBoard have a screen), the PMU standby on halt, the data volume's journal.
+Next (after M3, below): M4, the multitouch digitizer on spi1 (no model yet: its nub stays busy, and
+Setup cannot be walked), the PMU standby on halt, the data volume's journal.
 
-### M3 work: the panel lights, and audio is the gate (2026-10-17)
+### M3: Setup Assistant on the panel (2026-10-18)
 
-The display path is done (`hardware.md` "Display: the pipe as iBoot leaves it"): AppleCLCD adopts the
-framebuffer the model leaves as iBoot would, backboardd swaps through the A5 pipe's layer MMU, and the
-model composes UI0 and UI1 on the QEMU console at 640x960. backboardd and SpringBoard run software
-CoreAnimation, set on the system volume image (launchd's job plists; the guest reads them at its next boot):
+The first-boot Setup Assistant (the language list, `runs/n94/progress/2026-10-18_M3_setup-assistant.png`)
+on the 640x960 panel, 22 minutes of emulated boot after a fresh data volume: the data migration of a first
+boot takes about 14 of them (Apple logo and a progress bar, `2026-10-18_M3_migracao-andando.png`), then
+SpringBoard launches Setup. Later boots, the migration done, show Setup's welcome screen ("iPhone", slide
+to set up) after 4 minutes (`2026-10-18_M3_setup-boas-vindas.png`). From the repository root, on a store `ios_prep.py nand` made (B1-B4 above):
 
 ```
-python tools/ios-prep/ios_prep.py sysvol ../firmware/n94_10B329 --job com.apple.backboardd \
-    --job com.apple.SpringBoard --console --env CA_ENABLE_OGL=0
-python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn --hide arm-io/ae2
-build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=../runs/n94/nand \
-    -serial file:../runs/n94/m3-serial.log -display sdl -monitor stdio -trace 's5l8930_display*'
+python tools/ios-prep/ios_prep.py install ../firmware/n94_10B329 --nand ../runs/n94/nand --out ../runs/n94/install
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn --hide arm-io/ae2 --ramdisk restore     --ramdisk-file ../runs/n94/install/ramdisk-install.dmg --bundle ../runs/n94/install/kboot.bin     --add-boot-arg nand-enable-reformat=1
+build/qemu-system-arm -M iPhone-4S,kboot=../runs/n94/install/kboot.bin,nand=../runs/n94/nand     -serial file:../runs/n94/m2-install.log -display none -monitor stdio      # until "it_install: done"
+python tools/ios-prep/ios_prep.py sysvol ../firmware/n94_10B329 --job com.apple.backboardd     --job com.apple.SpringBoard --env CA_ENABLE_OGL=0
+python tools/ios-prep/ios_prep.py sysvol ../firmware/n94_10B329 --job com.apple.BTServer     --job com.apple.BlueTool --disable true
+python tools/ios-prep/ios_prep.py kboot ../firmware/n94_10B329 --nand ppn
+build/qemu-system-arm -M iPhone-4S,kboot=../firmware/n94_10B329/kboot.bin,nand=../runs/n94/nand     -serial file:../runs/n94/m3-serial.log -display sdl -monitor stdio
 ```
 
-`screendump FILE.ppm` in the monitor saves the panel (`runs/n94/run-m3.sh SECS` takes one every 30 s). What
-shows: black (iBoot's framebuffer, which kboot leaves empty) for 90 s, then backboardd's boot overlay, the
-Apple logo over an empty progress bar (`runs/n94/progress/2026-10-17_M3_primeiro-frame-logo.png`), and it
-stays there: three pipe0 swaps in a boot, none after the overlay (10 minutes watched).
+The normal boot no longer hides `arm-io/ae2` (the install boot still does). `screendump FILE.ppm` in the
+monitor saves the panel; `runs/n94/run-m3.sh SECS` (outside the repository) takes one every 30 s. With no
+touch the panel goes dark after about two minutes (auto-lock). What it took, in order:
 
-Why it stays, read off the device itself: the guest's crash and stackshot reports land on the data volume,
-whose pages the page store keeps in plain text (inverted, `XOR 0xff`), so a byte search of
-`runs/n94/nand/ch*-ce0.pages` for `Incident Identifier:` lists them with their headers and stacks; the
-libraries' load addresses come from a crash report of the same boot and the symbols from the shared cache's
-export tables. mediaserverd's own watchdog takes a stackshot of every process each time an
-`AudioSessionSetProperty` request times out (`Exception Code: 0xbe18d1ee`), and those show:
+1. **The display** (`hardware.md` "Display: the pipe as iBoot leaves it"): AppleCLCD adopts the framebuffer
+   the model leaves as iBoot would, backboardd swaps through the A5 pipe's layer MMU, the model composes UI0
+   and UI1 (an MMU-on layer is live at base 0). The first frame was backboardd's boot overlay, the Apple logo
+   over an empty progress bar, and it stayed.
+2. **Audio.** SpringBoard waited in `BKSDisplayServicesStart` on backboardd, whose CoreAnimation setup
+   waited on mediaserverd's Fig server, and mediaserverd sat in `FigPlayerCMSessionOneTimeInitialization`:
+   its audio session needs the audio hardware, and on the A5 every route goes through the AE2 coprocessor,
+   hidden since M2. `hw/arm/s5l8940_ae2.c` models it high-level (`hardware.md` "The AE2"), and the four I2S
+   blocks are the A4 model at the A5's bases (AppleSamsungI2S spun on the drained bit). AppleCS42L63Audio
+   and Highland Park start, mediaserverd reaches its run loop, backboardd and SpringBoard go on.
+3. **The data volume** (`contrib/it-install/it_install.c`): the migration (DataMigrator's plugins) waited
+   on assetsd, which aborted on "Error validating url for store" (CoreData): the photo library's directory
+   was missing. The install boot now lays the IPSW's own `/private/var` skeleton on the data volume (58
+   folders, small files and the localtime link, with their modes and owners, generated from rootfs.hfs by
+   `guest_install.var_skeleton`), as a restore does; the 190 MB of PreinstalledAssets are left out. It also
+   writes with content protection off and turns it back on (`kHFSContentProtectionBit`): what it wrote on a
+   protected volume (the keybag, launchd's overrides) was unreadable on the next boot, keybagd's kb_load
+   failed ("FATAL KEYBAG ERROR", a reboot into recovery). launchd still ignores the overrides database the
+   helper writes since the volume is protected, so the Bluetooth jobs are disabled in their plists instead
+   (BlueTool's HCI traffic on uart3 ends in AppleSimpleUARTSync's assertion, a kernel panic).
+4. **Edits to the system volume** (`sysvol`) reach the guest again: the FTL's garbage collection copies a
+   marker page as the bytes it was served, so the pages it had moved no longer followed rootfs.hfs (an edited
+   plist read as garbage and launchd dropped the job: mediaserverd vanished after its plist was rewritten).
+   Every install boot now writes the markers again ("already installed, refreshing the markers"); an edit
+   made long after an install may need one more install boot.
 
-- SpringBoard, two threads, its main thread in `BKSDisplayServicesStart` (BackBoardServices): it waits for
-  backboardd to declare the display ready before `UIApplicationMain`, so the system app never draws.
-- backboardd's main thread in QuartzCore, in a `dispatch_sync` into MediaToolbox, whose queue thread waits on
-  a Mach reply: CoreAnimation's server setup asks mediaserverd (the Fig services) and waits.
-- mediaserverd's main thread in `FigMediaServerStart` > `FigMovieStartServing` >
-  `FigPlayerCMSessionOneTimeInitialization`, on a condition variable: its audio session layer never comes up,
-  so the Fig server never answers.
-- The audio hardware it waits for never registers: configd logs `timed out waiting for IOKit to quiesce` with
-  `i2c0/audio0@4A` (AppleCS42L63Audio), `i2s0..3`, `highland-park` and `spi1/multi-touch@0` busy. The A5
-  routes all audio through the AE2 coprocessor: `i2s-switch,s5l8940x` is matched by `AppleAE2MCA`
-  (AppleAE2Audio), which needs the AE2 IOP (`AppleA5AE2`, EmbeddedIOP role AE2, `AppleSongbird`), hidden
-  since M2 because its firmware is never run.
-
-Checked and ruled out, each a full boot: unhiding nothing more but hiding every audio node (`--hide`
-`arm-io/i2s-switch`, `i2s0`..`i2s3`, `i2c0/audio0`, `highland-park`): mediaserverd still times out on
-`AudioSessionSetProperty` and the panel stays on the overlay; the same plus `spi1/multi-touch`: same;
-mediaserverd's job disabled (`sysvol --job com.apple.mediaserverd --disable true`, reverted): backboardd
-still waits (its Fig client waits for the server to appear). So M3 needs mediaserverd's audio session to come
-up, which on this board means the AE2 path (`hardware.md` "Open points").
-
-Two things that cost time here: user-space output to `/dev/console` does not reach the serial port (the
-`--console` jobs and the `asl.conf` console rule print nothing; the kernel's own lines do), and syslogd's
-store on the data volume holds only notice-level lines; the crash and stackshot reports were the way in.
+How the guest was read with no user-space console (output to `/dev/console` from user space never reaches
+the serial port here): `tools/dev/xnu_procs.py` lists the processes through QEMU's gdbstub (`-s`), the crash
+and stackshot reports are plain text in the page store (`runs/n94/nand/ch*-ce0.pages`, `XOR 0xff`; a byte
+search for `Incident Identifier:`), and user stacks come from the threads' saved state (10B329: the task's
+thread queue at task+0x28, a thread's next at +0x230, its user registers at +0x240, map+0x2c the pmap whose
+second word is the physical L1 table), symbolized from the shared cache's export tables with the boot's
+slide (`mach_msg_trap`'s return address). A gdbstub breakpoint on `objc_exception_throw` caught assetsd's
+exception.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 

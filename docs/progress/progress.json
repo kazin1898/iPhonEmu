@@ -19,9 +19,9 @@
         },
         {
           "name": "Boot to launchd (userland)",
-          "percent": 88,
+          "percent": 95,
           "weight": 5,
-          "note": "M2: BSD root disk0s1 from the NAND, launchd and the daemons; keybagd runs with the system keybag (B4); SpringBoard waits in BKSDisplayServicesStart on backboardd (M3)"
+          "note": "M2/M3: launchd, every daemon, the first-boot data migration (~14 min emulated) and SpringBoard with Setup"
         },
         {
           "name": "Storage: IOP, PPN NAND, FTL, NVRAM",
@@ -31,9 +31,9 @@
         },
         {
           "name": "Persistence (data volume, NVRAM across boots)",
-          "percent": 75,
+          "percent": 85,
           "weight": 2,
-          "note": "data volume, NVRAM generations, FTL state, effaceable lockers and the system keybag survive boots; sealing open"
+          "note": "data volume with the IPSW's /private/var skeleton and content protection, NVRAM, FTL, effaceable lockers and the system keybag survive boots; install boot refreshes the system markers"
         }
       ]
     },
@@ -83,9 +83,9 @@
       "items": [
         {
           "name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel",
-          "percent": 60,
+          "percent": 85,
           "weight": 5,
-          "note": "AppleCLCD adopts the framebuffer, backboardd's software CA swaps through the A5 layer MMU: boot overlay on screen; app frames wait on audio (M3)"
+          "note": "Setup Assistant on screen (M3): AppleCLCD adopts the framebuffer, software CoreAnimation swaps through the A5 layer MMU; GPU path and RGBOUT/TV-out open"
         },
         {
           "name": "GPU: GL bridge on Windows (ANGLE)",
@@ -97,13 +97,13 @@
           "name": "Multitouch (SPI) and buttons",
           "percent": 0,
           "weight": 3,
-          "note": "A4 digitizer models to adapt; n94 profile unknown"
+          "note": "M4: the spi1 multi-touch nub stays busy (no digitizer model); A4 Z2 models to adapt"
         },
         {
           "name": "Audio (I2S, CS42L63, AE2)",
-          "percent": 0,
+          "percent": 35,
           "weight": 2,
-          "note": "ae2 hidden; mediaserverd's audio session never starts and gates backboardd and SpringBoard (M3): the AE2 IOP is next"
+          "note": "AE2 coprocessor modeled high-level, I2S blocks, codec and Highland Park start, mediaserverd up; no PCM to the host yet, AE2 audio endpoints unread"
         }
       ]
     },
@@ -155,7 +155,8 @@
     },
     {
       "name": "M3 Setup / lock screen",
-      "done": false
+      "done": true,
+      "date": "2026-10-18"
     },
     {
       "name": "M4 home screen and apps",
