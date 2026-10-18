@@ -64,7 +64,10 @@ rtclock: at init TMR_CNT <- 0x7fffffff, TMR_CFG <- 1, TMR_INT_STAT <- 1; each de
 had to get right for the kernel to keep its clock (`hw/arm/s5l8940_aic.c` has the trace evidence):
 
 - The timer **reloads** its count when it reaches zero: the kernel acks some FIQs without writing a new
-  TMR_CNT and waits for the next one.
+  TMR_CNT and waits for the next one. The reload is at least 1 ms (24,000 ticks): when the count left
+  was a deadline a few ticks away, reloading it as is fired the FIQ about 100,000 times a second of host
+  time, the CPU sat in the FIQ handler (half the PC samples in FIQ mode, the rest in
+  AppleInterruptController) and the UI froze minutes into Setup (M4). A count the kernel writes is exact.
 - The FIQ is **held until GLB_CFG has 0x70**: the kernel arms its first 9.5 ms deadline before the FIQ
   dispatcher has a callback (`cpu_data + 0x30` is NULL, the event is acked and dropped), and never re-arms
   after a dropped one, so a FIQ delivered before `AppleInterruptController::start` stops the clock for good.
@@ -138,7 +141,7 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 | uart1 | 0x32600000 | 22 | `uart-1,samsung`, `debug` | **A4** |
 | uart3 | 0x32800000 | 24 | `uart-1,samsung`; child `bluetooth,n88` | **A4**; BT stub. |
 | uart5 | 0x32A00000 | 26 | `uart-1,samsung`; child `gas-gauge,bq27540|gas-gauge,hdq` | **A4** `s5l8930_hdq.c` (the iPad's bq27545 model, 1420 mAh on n90). |
-| spi1 | 0x32100000 | 29 | `spi-1,samsung`; child `multi-touch,n94` (GPIO irq 0x15) | **A4** `ipod_touch_spi.c`; touch: the A4 boards' multitouch models (N1F55 on n90). The n94 panel's profile is to find (`AppleMultitouchSPIC1F58`, `N1F55`, `N1F56` kexts; `multi-touch-calibration` 1 KiB). |
+| spi1 | 0x32100000 | 29 | `spi-1,samsung`; child `multi-touch,n94` (GPIO irq 0x15) | **A4** `ipod_touch_spi.c` (64 KiB TX FIFO for the firmware burst) with the N1 digitizer model `ipod_touch_multitouch.c`, profile `mt_profile_n94` (M4, "Touch and buttons" below). |
 | i2c0 | 0x33200000 | 18 | `i2c,s5l8940x|iic,soft` | `hw/arm/s5l8940_i2c.c`: a PA Semi style FIFO master, not the A4 block ("The I2C controller" below). Devices: PMU `pmu,d1881` @0x74 (GPIO irq 0xd; `hw/arm/s5l8940_d1881.c`, a register file), codec `audio-control,cs42l63` @0x4a (the A4 CS42L58 model: the driver never checks the ID), `headset-switch,ts3a8235` @0x3b (none). |
 | i2c1 | 0x33300000 | 19 | same | `compass,akm8975b` @0x0d (A4 AK8975 model), `als,tsl2581` @0x49 (A4 model). |
 | i2c2 | 0x33400000 | 20 | same | `accelerometer,lis331dlh` @0x19 (the iPod LIS302DL model, WHO_AM_I 0x32; AppleLIS331DLH then fails for want of calibration data), `gyro,ap3gdl` @0x6a (A4 L3G4200D model; AppleAP3GDL finds ID 0xd3 and fails on a singular calibration matrix) and @0x68. |
@@ -152,7 +155,7 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 | Node | reg | AIC | compatible | Model |
 |---|---|---|---|---|
 | clcd | 0x3A100000+0x7000 (display pipe), 0x39200000+0x2000 (CLCD), 0x39300000 | 43, 42 | `clcd,s5l8940x` | **A4** `s5l8930_display.c` (pipe 0x89000000, CLCD 0x89200000): same offsets. Kexts `AppleH4PDisplayPipe`, `AppleH4PCLCD`. 640x960 at scale 2. |
-| mipi-dsim | 0x39500000, 0x3F110000 | 41 | `mipi-dsim-1,samsung`; child `lcd,pinot` | **A4** `ipod_touch_mipi_dsi.c` (0x89500000); `ApplePinotLCD`. |
+| mipi-dsim | 0x39500000, 0x3F110000 | 41 | `mipi-dsim-1,samsung`; child `lcd,pinot` | **A4** `ipod_touch_mipi_dsi.c` (0x89500000); `ApplePinotLCD`. reg[1] is the panel clock's slow adaptive clocking block (`sac-version 1`, the `sacm` node's `saca` function 'lcd0'): `n94.c` models it as a register file whose +0x00 reads bit 8 (ready) set ("Touch and buttons" below). |
 | rgbout | 0x3A200000+0x7000, 0x39600000 | 44, 45 | `rgbout,s5l8940x` | **A4** (0x89100000 / 0x89600000). |
 | tv-out | 0x39400000 | 40 | `tv-out,s5l8940x|s5l8930x` | **A4** (0x89400000). |
 | displayport | 0x39700000, 0x34195000 | 46, 47 | `displayport,s5l8940x` | **new / hide** (`AppleSamsungDPTX`). |
