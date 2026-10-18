@@ -1231,10 +1231,19 @@ host_opengl = dependency('appleframeworks', modules: 'OpenGL',
 angle_prefix = get_option('ltm_angle_prefix')
 if angle_prefix != ''
   if host_os != 'darwin'
-    error('The experimental ANGLE backend currently requires macOS')
+    error('ltm_angle_prefix names a macOS ANGLE build tree; Windows takes ANGLE from pkg-config')
   endif
   host_opengl = declare_dependency(compile_args: ['-DGLES_HOST_ANGLE=1', '-I' + angle_prefix / 'include'],
     link_args: ['-L' + angle_prefix / 'out/ltm-metal', '-Wl,-rpath,' + angle_prefix / 'out/ltm-metal', '-lEGL', '-lGLESv2'])
+elif host_os == 'windows'
+  # Windows has neither framework. The same executor runs on ANGLE instead
+  # (EGL + GLES 1/2 over Direct3D 11): MSYS2's mingw-w64-angleproject, whose
+  # libGLESv2 exports the ES 1.1 entry points too (docs/windows-gl.md).
+  angle = dependency('angleproject', required: false, method: 'pkg-config')
+  if angle.found()
+    host_opengl = declare_dependency(compile_args: ['-DGLES_HOST_ANGLE=1', '-DGLES_HOST_ANGLE_D3D11=1'],
+                                     dependencies: angle)
+  endif
 endif
 # IOSurface (and the CoreFoundation dictionary that configures one) is not
 # optional garnish here: it is the render target the iOS present path reads,

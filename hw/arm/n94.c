@@ -42,6 +42,10 @@
 #include "system/reset.h"
 #include "system/system.h"
 #include "target/arm/cpu.h"
+#include "target/arm/cpregs.h"
+#include "hw/arm/guest-services/general.h"
+#include "hw/arm/guest-services/gles.h"
+#include "hw/arm/guest-package.h"
 #include "ui/console.h"
 #include "ui/input.h"
 
@@ -67,6 +71,7 @@ struct N94MachineState {
     bool mtt_seen[MT_MAX_FINGERS];
     char *kboot_path;
     char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
+    GuestPackage pkg;                    /* the GL front end's hello, guest packages (hw/arm/guest-package.c) */
 };
 
 #define KBOOT_MAGIC "K48KBOOT"
@@ -94,6 +99,9 @@ static void n94_cpu_reset(void *opaque)
     uint32_t load_pa, entry_pa, bootargs_pa, image_len;
 
     cpu_reset(cs);
+    /* A reboot sends no GL teardown for its old processes. */
+    gles_host_reset();
+    guest_pkg_reset(&s->pkg);
 
     if (!g_file_get_contents(s->kboot_path, &data, &size, &gerr)) {
         error_report("n94: cannot read kboot bundle '%s': %s", s->kboot_path, gerr->message);
@@ -341,6 +349,48 @@ static const MemoryRegionOps n94_sac_ops = {
     .valid.max_access_size = 4,
 };
 
+/*
+ * The guest-services trap (mcr p15,3,Rn,c15,c15,0) the GL front end
+ * (contrib/gles-public, OpenGLES.framework) calls the host through, as on the
+ * A4 boards (ipad1.c): GL calls go to the host executor, hw/arm/gles-host.c,
+ * which runs them on ANGLE on Windows (docs/windows-gl.md). GLES, its liveness
+ * probe, and the front end's hello and guest packages (guest-package.c); the A4
+ * boards' pasteboard and agent are not wired.
+ */
+static void n94_qemu_call(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    CPUState *cs = env_cpu(env);
+    N94MachineState *s = N94_MACHINE(qdev_get_machine());
+    qemu_call_t q;
+    int32_t err = 0;
+
+    if (cpu_memory_rw_debug(cs, value, (uint8_t *)&q, sizeof(q), 0)) {
+        return;
+    }
+    switch (q.call_number) {
+    case QC_GLES:
+        q.retval = qc_handle_gles(cs, &q.args.gles);
+        break;
+    case QC_GLES_PING:
+        q.retval = QC_GLES_PING_MAGIC;
+        break;
+    default:
+        if (!guest_pkg_call(&s->pkg, cs, &q, &err)) {
+            return;
+        }
+    }
+    q.error = err;
+    cpu_memory_rw_debug(cs, value, (uint8_t *)&q, sizeof(q), 1);
+}
+
+static const ARMCPRegInfo n94_cp_reginfo[] = {
+    { .name = "QEMU_CALL", .cp = 15, .opc1 = 3, .crn = 15, .crm = 15,
+      .opc2 = 0, .access = PL0_RW, .state = ARM_CP_STATE_AA32,
+      .type = ARM_CP_IO | ARM_CP_NO_RAW | ARM_CP_RAISES_EXC, /* gles_guest_rw */
+      .readfn = qemu_call_status,
+      .writefn = n94_qemu_call },
+};
+
 static void n94_init(MachineState *machine)
 {
     N94MachineState *s = N94_MACHINE(machine);
@@ -369,6 +419,7 @@ static void n94_init(MachineState *machine)
         object_property_set_bool(cpuobj, "has_el2", false, &error_fatal);
     }
     object_property_set_bool(cpuobj, "realized", true, &error_fatal);
+    define_arm_cp_regs(s->cpu, n94_cp_reginfo);
     object_unref(cpuobj);
 
     memory_region_init_ram(&s->dram, NULL, "n94.dram", S5L8940_DRAM_SIZE, &error_fatal);
@@ -704,6 +755,11 @@ static void n94_set_nand(Object *obj, const char *value, Error **errp)
     s->nand_path = g_strdup(value);
 }
 
+static void n94_instance_init(Object *obj)
+{
+    guest_pkg_init(&N94_MACHINE(obj)->pkg, obj);
+}
+
 static void n94_instance_finalize(Object *obj)
 {
     g_free(N94_MACHINE(obj)->kboot_path);
@@ -738,6 +794,7 @@ static const TypeInfo n94_machine_info = {
     .parent = TYPE_MACHINE,
     .interfaces = arm_machine_interfaces,
     .instance_size = sizeof(N94MachineState),
+    .instance_init = n94_instance_init,
     .instance_finalize = n94_instance_finalize,
     .class_init = n94_class_init,
 };

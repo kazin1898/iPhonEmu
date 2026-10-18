@@ -61,9 +61,14 @@
  * glOrtho/glFrustum/glClearDepth take doubles on the desktop and floats in ES.
  * Nothing here is a reimplementation; each shim below is a rename.
  */
+#ifdef __APPLE__
 #include <TargetConditionals.h>
 #if !TARGET_OS_IPHONE
 #include <VideoToolbox/VideoToolbox.h>
+#endif
+#else
+/* Windows: ANGLE (EGL + GLES over Direct3D 11) is the only backend. */
+#define TARGET_OS_IPHONE 0
 #endif
 
 #if TARGET_OS_IPHONE || defined(GLES_HOST_ANGLE)
@@ -91,7 +96,9 @@
 #endif
 
 /* Framebuffer objects are core in ES 1.1's OES form. Same tokens, same
- * arguments, different suffix. */
+ * arguments, different suffix. (ANGLE takes the OES names only in an ES1
+ * context and the core ones only in an ES2 one: gles-host-angle.c.inc.) */
+#ifndef GLES_HOST_ANGLE
 #define glIsFramebufferEXT           glIsFramebufferOES
 #define glIsRenderbufferEXT          glIsRenderbufferOES
 #define glGenerateMipmapEXT          glGenerateMipmapOES
@@ -107,6 +114,7 @@
 #define glDeleteRenderbuffersEXT      glDeleteRenderbuffersOES
 #define glGetRenderbufferParameterivEXT glGetRenderbufferParameterivOES
 #define glGetFramebufferAttachmentParameterivEXT glGetFramebufferAttachmentParameterivOES
+#endif
 #ifndef GL_RGB8
 #define GL_RGB8                       GL_RGB8_OES
 #endif
@@ -186,6 +194,16 @@ void gles_eagl_iosurface_unlock(void);
 
 #define GLES_BGRA_READ_TYPE           GL_UNSIGNED_INT_8_8_8_8_REV
 
+#endif
+
+/* The internal format a host glTexImage2D takes for this upload. ES wants an
+ * unsized internal format to equal the format (ANGLE: GL_INVALID_OPERATION
+ * otherwise, BGRA included); the ES 1.1/2.0 the guest speaks never passes a
+ * sized one. Apple's EAGL and desktop GL take RGBA storage for BGRA texels. */
+#ifdef GLES_HOST_ANGLE
+#define gles_host_ifmt(internal, format) ((void)(internal), (GLint)(format))
+#else
+#define gles_host_ifmt(internal, format) ((GLint)(internal))
 #endif
 
 /* The physical LCD remains portrait. Individual CA drawables can be landscape
@@ -660,10 +678,12 @@ static inline uint64_t gles_t(void)
 
 static bool gles_platform_context_create(void)
 {
-    if (!gles_angle_create(gh.group ? gh.group->root : NULL, &gh.cgl)) return false;
+    if (!gles_angle_create(gh.group ? gh.group->root : NULL, gh.api_version == 2 ? 2 : 1, &gh.cgl)) {
+        return false;
+    }
     if (gh.group && !gh.group->root) gh.group->root = CGLRetainContext(gh.cgl);
     if (CGLSetCurrentContext(gh.cgl) != 0) return false;
-    fprintf(stderr, "[gles-angle] prototype ES1 context api=%u renderer=%s version=%s\n",
+    fprintf(stderr, "[gles-angle] context api=%u renderer=%s version=%s\n",
             gh.api_version, glGetString(GL_RENDERER), glGetString(GL_VERSION));
     return true;
 }
@@ -4276,7 +4296,7 @@ static int gles_surface_upload(GLESSurface *s, uint32_t fmt, uint8_t *pixels)
     glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     gles_texture_begin();
-    glTexImage2D(target, 0, GL_RGBA, w, h, 0, glfmt, type, pixels);
+    glTexImage2D(target, 0, gles_host_ifmt(GL_RGBA, glfmt), w, h, 0, glfmt, type, pixels);
     glPixelStorei(GL_UNPACK_ALIGNMENT, unpack);
     if (gles_texture_end(target, 0, (GLESPVRTCLevel){0})) {
         gles_refuse("surface:upload:%s", gles_fourcc(s->format, fourcc));
@@ -4398,7 +4418,8 @@ static bool gles_surface_copy(GLuint from, const GLESSurface *src, GLuint to, GL
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING_EXT, &draw_fb);
     glGetBooleanv(GL_COLOR_WRITEMASK, mask);
     gles_texture_begin();
-    glTexImage2D(target, 0, GL_RGBA, src->width, src->height, 0, GL_BGRA, GL_UNSIGNED_BYTE, NULL);
+    glTexImage2D(target, 0, gles_host_ifmt(GL_RGBA, GL_BGRA), src->width, src->height, 0, GL_BGRA,
+                 GL_UNSIGNED_BYTE, NULL);
     /* the writeback's scratch framebuffer reads, a second one draws (bound first, so it is in use) */
     if (!gh.sync_fbo) gh.sync_fbo = gles_private_name(glIsFramebufferEXT);
     glBindFramebufferEXT(GL_READ_FRAMEBUFFER_EXT, gh.sync_fbo);
@@ -4801,6 +4822,10 @@ static char *gles_es2_string(CPUState *cpu, uint32_t ptr, int32_t len)
  * this they failed to compile and the game's menu buttons never drew. */
 static char *gles_es2_glsl(const char *src)
 {
+#ifdef GLES_HOST_ANGLE
+    /* ANGLE's ES2 context compiles ES GLSL 1.00 itself. */
+    return g_strdup(src);
+#endif
     GString *out = g_string_new("#version 120\n"
                                 "#define lowp\n#define mediump\n#define highp\n#define ES_GL_ES 1\n");
     GString *es = g_string_new(NULL);
@@ -5834,7 +5859,7 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
          * the host must unpack with the guest's alignment, not its own. */
         gles_unpack_apply(pixels ? row_length : 0);
         gles_texture_begin();
-        glTexImage2D(target, level, ifmt == GL_BGRA ? GL_RGBA : ifmt, w, h,
+        glTexImage2D(target, level, gles_host_ifmt(ifmt == GL_BGRA ? GL_RGBA : ifmt, fmt), w, h,
                      border, fmt, gles_host_type(type), px);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         if (gles_texture_end(target, level, (GLESPVRTCLevel){0})) {
@@ -6781,6 +6806,26 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
     case 468: glFinishFenceAPPLE(a[0]); return 0;
     case 469: return glTestObjectAPPLE(a[0], a[1]);
     case 470: glFinishObjectAPPLE(a[0], a[1]); return 0;
+#elif defined(GLES_HOST_ANGLE)
+    /* APPLE_fence has no ES counterpart on ANGLE. Every call here runs before the
+     * next one is taken and a frame reaches the guest by readback, so a fence is
+     * signaled as soon as it is set (the front end answers APPLE_sync alike). */
+    case 463: {                                 /* glGenFencesAPPLE(n, fences*) */
+        static uint32_t next_fence;
+        uint32_t n = a[0];
+        g_autofree GLuint *ids = NULL;
+        if (n > GLES_MAX_NAMES) {
+            gles_refuse("cap:glGenFencesAPPLE");
+            return -1;
+        }
+        ids = g_new0(GLuint, n ? n : 1);
+        for (uint32_t i = 0; i < n; i++) ids[i] = ++next_fence ? next_fence : ++next_fence;
+        if (a[1] && n) gles_guest_rw(cpu, a[1], (uint8_t *)ids, n * sizeof(GLuint), 1);
+        return 0;
+    }
+    case 464: case 465: case 468: case 470: return 0;  /* delete, set, finish fence, finish object */
+    case 466: return a[0] != 0;                         /* glIsFenceAPPLE */
+    case 467: case 469: return 1;                       /* glTestFenceAPPLE, glTestObjectAPPLE */
 #endif
 
     /* ---- lighting and fog ---- */
@@ -7438,12 +7483,6 @@ static int64_t gles_context_operation(unsigned slot, unsigned ctx, unsigned argc
     if (slot == GLES_OP_NEW_CONTEXT) {
         if ((argc != 1 && argc != 2) || gles_handle == UINT32_MAX) return -1;
         if (argc == 2 && args[1] != 1 && args[1] != 2) return -1;
-#ifdef GLES_HOST_ANGLE
-        if (argc == 2 && args[1] != 1) {
-            gles_refuse("angle:es2-not-implemented");
-            return -2;
-        }
-#endif
         GLESGroup *group = g_hash_table_lookup(gles_groups, GUINT_TO_POINTER(args[0]));
         if (!group) return -1;
         if (!gles_begin_context()) return -1;
