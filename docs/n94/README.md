@@ -436,8 +436,10 @@ list, not the home screen, so the home screen and the stock apps on the bridge w
 (the Terms page is the user's to accept; not done here). Setup in Portuguese drawn by the bridge:
 `2026-10-18_GL_setup-pais-pt.png`; a page transition (Voltar) caught mid-slide:
 `2026-10-18_GL_setup-transicao-pagina.png`, the whole slide in one intermediate frame (3 changed frames in
-8 s of sampling), against ~20 on the phone. Open: that transition's frames (counted by swaps and GL frames,
-not screendumps, as in `docs/windows-gl.md`), the home screen and apps on the bridge, and the second core.
+8 s of sampling), against ~20 on the phone. Counted by the display's frame-timeline instead, the bridge
+draws 16-20 frames of such a slide's 20-24 VBLs; the fast screendumps themselves halved the VBL and lost
+taps (`docs/windows-gl.md`, "A page transition, frame by frame"). Open: the home screen and apps on the
+bridge, and the second core.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

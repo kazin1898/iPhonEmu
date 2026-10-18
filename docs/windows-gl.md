@@ -118,6 +118,44 @@ The page now reaches its own 30 frames/s with the window minimized (26.5 before 
 The screendump number does not move, as above, and one boot each is inside the 193-263 s spread. What is left
 on the host is the writeback; it would matter to a guest that renders every VBL, which this page does not.
 
+## A page transition, frame by frame (2026-10-18)
+
+A screendump sampler had caught a Setup page slide ("Voltar") in one intermediate frame, against the ~20 a
+phone draws in its 0.35 s. Counted instead by the display's `frame-timeline` and `-trace gles_call_log`
+(which now gives each call's host microseconds), switched on with `trace-event-set-state` around a tap, on a
+clone of the M4 unit (`m4gl`) with the SDL window in front:
+
+| slide | VBLs from its first to its last drawn frame | frames drawn | VBLs without one |
+|---|---|---|---|
+| Setup, language -> country (push), 3 runs | 22-24 | 16-17 | 5-7 |
+| Setup, country -> language (Back), 3 runs | 20 | 16 | 4 |
+| Settings -> Safari (push), 2 runs | 23 | 19-20 | 3-4 |
+| the same, SDL window minimized, 2 runs | 23 | 19-20 | 3-4 |
+
+So the bridge draws the slide: 70-87% of its VBLs carry a new frame, minimized as well (the VBL fix above).
+The VBLs are 15.4-18.6 ms apart throughout. A slide frame is 230-280 GL calls with 60-80 draws, and spans
+~15 ms (10-17) of guest time from its first call to its last; its host time is 3.8 ms: 2.2 ms the writeback
+(the `glBindFramebuffer(0)` that ends CA's frame), ~1.4 ms the draws (18-20 us each), 0.1 ms the flush.
+The other ~11 ms is the guest's own. The frames missed are the slide's first, which spans 3-4 VBLs (50-67 ms;
+host ~15 ms of it, 17 IOSurface binds at 0.34 ms each among them, the rest CA in the guest preparing the new
+page's layers), and now and then a frame whose span crosses a VBL. Before the slide the app lays the new page
+out and draws it: 330-480 ms from the tap to the first slide frame.
+
+The guest is busy throughout: gdbstub PC samples (~170/s, across a push and a Back) show 85-90% in the idle
+`wfi` before and after, and none from the tap to the slide's end: first the app's process, then the one
+making the GL calls, with 40-60% of the samples in the kernel, mostly the interrupt path and the 64-bit
+timebase read (`0x80087b20`, three MMIO reads; samples land on MMIO exits more often than elsewhere, so that
+share is probably high). The interrupt load is not a storm: with `-trace s5l8940_aic*` the same over 1.5-2 s
+idle and during a push, 140-155 timer FIQs/s, ~500 timer reloads/s, ~2,700 timebase reads/s.
+
+The one intermediate frame was the sampler. Screendumps as fast as QMP answers (76-100/s, `screendump` on
+the main loop) during the same taps: the VBL went from 60 Hz to ~30 Hz with gaps up to 195 ms, taps were
+lost, and the slides came out with 0-7 frames (0-1,236 GL calls in the 3 s traced, against 4,000-9,000
+undisturbed). Count frames with the `frame-timeline`, never with screendumps. What would add frames is the
+writeback's 2.2 ms, read back asynchronously (a pixel-pack buffer and a fence: the context is ES 3.0 on
+ANGLE), which would keep the spans under a VBL; the first frame and the ~11 ms a frame takes the guest are the
+TCG core's speed.
+
 ## Limitations
 
 - Windows only with Direct3D 11 (ANGLE's default here); the Vulkan and SwiftShader backends in the package are not
