@@ -414,6 +414,46 @@ Alternatives, costed:
   would reopen path (a) with the proven A4 generator, at the price of a kernelcache not built for this board
   (PMU, panel, touch and baseband kexts differ); an hour to check, outcome uncertain.
 
+## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
+
+The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
+is instantiated at the A5's addresses with `generation=4`, and the Samsung MIPI-DSIM model
+(`hw/arm/ipod_touch_mipi_dsi.c`) at 0x39500000 (IRQ 41, 4 lanes, the HS clock request already on, as iBoot's
+`pinot_init` leaves it). The two DARTs `AppleS5L8930XDART` programs (dart-nrt, dart-rt) are mapped; the `clcd`
+node has no `iommu-parent`, so the pipe's layer bases are physical addresses (`AppleCLCD, fMapper: 0`) and the
+model's own dart2 window stays unmapped. What the 10B329 drivers expect, and what the model does:
+
+- **The gate.** `AppleCLCD::start_hardware` (the 6.x build, `AppleH4PCLCD`) adopts the display only as iBoot
+  hands it over: the CLCD's timing generator running (CLCD `+0x50` bit 0, ENVID) with a nonzero vertical
+  timing word (`+0x58`), and UI0 live on the pipe (`+0x1038` bit 8, the framebuffer base, stride and window).
+  Otherwise it logs `CLCD not initied by iBoot, driver will not load` and never registers a framebuffer, so
+  IOMobileFramebuffer has no main display for backboardd. The model's reset leaves exactly that (the same
+  values the A4 boards get, the k48 timing words included) with the framebuffer from the kboot bundle's
+  boot_args (`Video`: 0x9f700000, 640x960, 2560 bytes per row, which tools/ios-prep reserves under pram).
+  The kernel then logs `DefaultFrameBuffer DPCENAB= 0x100, DPU0SRCFMT=0x0, DPU0SRCBASE=0x9f700000`,
+  `fDefaultFBStride=2560, fDisplayWidth=640, fDisplayHeight=960`, `ApplePinotLCD: _lcdPanelID: 0x00a1d13c
+  _lcdPanelClass: 2` (the DT's `lcd-panel-id`; nothing is read over the DSI link) and `Added framebuffer
+  device: AppleCLCD`; `AppleARMBacklight` finds the CLCD service.
+- **The A5 pipe's window registers.** `AppleH4PDisplayPipe` keeps the A4's `+0x40` format, `+0x44` base
+  and `+0x48` stride in each UI block (`+0x4000` UI0, `+0x5000` UI1) but moves the window: source crop
+  `+0x4c`, source size `+0x50`, destination origin `+0x60`, destination far corner `+0x70` (start_hardware
+  takes iBoot's width as `0x70.hi - 0x60.hi`). The model reads those for generation 4 and seeds them at reset.
+- **The layer MMU.** In place of the A4's DART the A5 pipe has an MMU per layer: `+0x90` bit 0 enables it and
+  `+0x98 + 4k` holds the physical address of the page table of the layer's k-th 4 MiB (1024 words, `PA | 1`
+  per 4 KiB page, filled by the driver's `populateUIMMUTable`); with it on, the layer's base is an address in
+  that space. The model walks the tables when it fetches the layer. What backboardd's first swaps program
+  (`-trace 's5l8930_display*'`, `[disp] pipe0 swap N: pkt`): UI0 format 0x1001 (BGRA), base 0, stride
+  0xa02, source and destination 640x960, MMU on, and a page table that maps the surface 1:1 onto iBoot's
+  framebuffer (PTEs 0x9f700001, 0x9f701001, ...): backboardd adopts the boot framebuffer as its first
+  frame, as it does on the devices (the boot logo stays until the system app's first frame). The blend
+  words at `+0x2040/+0x2044/+0x2048` (0x00ff0202, 0x00ff0001, 0x00ff0003) and the video block's bases
+  (`+0x3074..+0x30a0`, all 0) ride the same swaps. Formats: 0 BGRA, 2 ARGB4444, 3 ARGB1555 (`L555`),
+  4 RGB565.
+- **Observed so far.** Three swaps on pipe0 (IDs 9, 17, 25) in the first minute of a normal boot, none later
+  in five minutes; the RGBOUT pipe gets a pair per `AppleRGBOUT` power cycle (12 in five minutes). The boot
+  framebuffer is zero (kboot draws no logo), so the panel is black until the system app's first frame, which
+  has not come: see the README's M3 section for the state of that.
+
 ## Open points for the machine model
 
 1. ~~AIC register map~~: confirmed against the kext (section above). Still open in the model: which GLB_CFG
