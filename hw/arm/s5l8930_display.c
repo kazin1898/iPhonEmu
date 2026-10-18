@@ -20,6 +20,8 @@
 #include "hw/arm/s5l8930.h"
 #include "hw/arm/frame-timeline.h"
 #include "hw/arm/panel-gamma.h"
+#include "exec/vaddr.h"
+#include "hw/arm/guest-services/gles.h"
 #include "system/runstate.h"
 #include "ui/input.h"
 #include "qemu/cutils.h"
@@ -412,6 +414,10 @@ static void vbl_tick(void *opaque)
             return;
         }
     }
+
+    /* The GL bridge's frame-end writeback may still be in flight (read back
+     * asynchronously): it lands in guest memory before anything is latched. */
+    gles_host_writeback_sync();
 
     bool new_frame = s->pipe[0].swap_pending;
     /* One ring entry per vsync: a real swap is a new latched frame; every other
@@ -951,6 +957,13 @@ static void front_latch(S5L8930DisplayState *s)
     UILayer u[2];
     bool on[2];
     bool valid = layers(s, w, h, u, on, key);
+    /* A swapped layer's memory is scanout: the GL bridge may write its frames back late (by the next VBL). */
+    for (int l = 0; valid && s->pipe[0].swap_pending && l < 2; l++) {
+        hwaddr pa = !on[l] ? (hwaddr)-1 : u[l].mmu ? h4p_mmu_xlate(&u[l], u[l].base) : dart_xlate(s, u[l].base);
+        if (pa != (hwaddr)-1) {
+            gles_host_note_scanout(pa);
+        }
+    }
     size_t len = valid ? layers_fetch(s, u, on) : 0;
     g_autofree uint32_t *base = g_new(uint32_t, (size_t)w * h);
     bool video = valid && video_compose(s, w, h, base);

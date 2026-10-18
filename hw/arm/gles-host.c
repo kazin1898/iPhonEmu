@@ -34,6 +34,7 @@
 #include "exec/target_page.h"
 #include "system/ram_addr.h"
 #include "system/physmem.h"
+#include "system/address-spaces.h"
 #include "hw/core/sysbus.h"
 #include "hw/arm/ipod_touch_2g.h"
 #include "hw/arm/guest-services/general.h"
@@ -347,6 +348,8 @@ typedef struct {
 #endif
     GLuint fbo, tex, depth, sync_fbo;   /* sync_fbo: gles_surface_writeback's scratch */
     GLuint copy_fbo;                    /* gles_surface_copy's draw side */
+    GLuint wb_pbo;                      /* the frame-end writeback's pack buffer (gles_wb) */
+    size_t wb_pbo_size;
     uint32_t drawable_width, drawable_height;
     /* Set once the guest shim reports its CA layer size. Shims that predate
      * GLES_OP_DRAWABLE_STORAGE keep the legacy panel-sized crop. */
@@ -4050,7 +4053,7 @@ done:
  * is what IOSurface and QuartzCore name in every firmware (immediates in 5F138 through
  * 8C148: the 32-bit orders, the two packed 16-bit RGBA orders, the opaque 16-bit pair)
  * plus the 8-bit masks CoreAnimation builds at runtime. */
-static int gles_surface_flush(CPUState *cpu, uint32_t base);
+static int gles_surface_flush(CPUState *cpu, uint32_t base, bool async);
 
 static unsigned gles_surface_bpp(uint32_t fmt)
 {
@@ -4499,7 +4502,7 @@ static int64_t gles_bind_surface(CPUState *cpu, const uint32_t *a, uint32_t id)
         gles_refuse("surface:window:%s", gles_fourcc(fmt, fourcc));
         return -1;
     }
-    if (gles_surface_flush(cpu, a[1])) return -1;     /* a rendered alias: its pixels are on the host */
+    if (gles_surface_flush(cpu, a[1], false)) return -1;     /* a rendered alias: its pixels are on the host */
 
     /* ponytail: NV12 (video, new every frame anyway) is not tracked; its two planes would
      * need two page lists. */
@@ -4635,54 +4638,15 @@ static int64_t gles_sync_surface_1(CPUState *cpu)
     return 0;
 }
 
-/* Texture `texture`'s pixels into its surface's guest memory. */
-static int gles_surface_writeback(CPUState *cpu, GLuint texture, GLESSurface *s)
+/*
+ * Rows of `pixels` (the texture's order) into `s`'s guest memory. Where its pages are
+ * known (by the surface's kernel ID), the frame goes to them as the SGX writes a
+ * surface, through its own MMU: the binding process may map a surface read-only (5.x
+ * SpringBoard's layer surfaces: every store faulted, the kernel returned without
+ * making the page writable, and the frame was dropped).
+ */
+static int gles_surface_store(CPUState *cpu, GLESSurface *s, const uint8_t *pixels, unsigned bpp)
 {
-    GLint pack = 4, framebuffer = 0;
-    bool rgb555 = s->format == GLES_SURFACE_RGB555;
-    unsigned bpp = (s->format == GLES_SURFACE_RGB565 || rgb555) ? 2 : 4;
-    g_autofree uint8_t *pixels = g_malloc((size_t)s->width * s->height * 4);
-
-    /* Read through a scratch framebuffer: the texture is no longer the bound
-     * target by the time its frame is flushed. */
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
-    if (!gh.sync_fbo) gh.sync_fbo = gles_private_name(glIsFramebufferEXT);
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, gh.sync_fbo);
-    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, s->target, texture, 0);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, s->width, s->height,
-        bpp == 2 && !rgb555 ? GL_RGB : s->format == GLES_SURFACE_RGBA32 ? GL_RGBA : GL_BGRA,
-        bpp == 2 && !rgb555 ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE, pixels);
-    glPixelStorei(GL_PACK_ALIGNMENT, pack);
-    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, s->target, 0, 0);
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, framebuffer);
-    if (glGetError() != GL_NO_ERROR) {
-        gles_refuse("surface:writeback");
-        s->dirty = false;
-        return -1;
-    }
-    if (rgb555) {
-        for (size_t i = 0; i < (size_t)s->width * s->height; i++) {
-            unsigned value = (pixels[i * 4] >> 3) |
-                ((pixels[i * 4 + 1] >> 3) << 5) | ((pixels[i * 4 + 2] >> 3) << 10);
-            pixels[i * 2] = value;
-            pixels[i * 2 + 1] = value >> 8;
-        }
-    }
-    if (trace_event_get_state_backends(TRACE_GLES_SURFACE_LOG)) {
-        static unsigned traced;
-        uint64_t sum = 0;
-        for (size_t i = 0; i < (size_t)s->width * s->height * bpp; i += 97) sum += pixels[i];
-        if (traced++ < 40) TRACE_PRINTF(trace_gles_surface_log, "[gles] sync surface tex %d -> %08x %ux%u sample-sum %" PRIu64 "\n",
-                                   texture, s->base, s->width, s->height, sum);
-    }
-    /*
-     * Where its pages are known (by the surface's kernel ID), the frame goes to them as
-     * the SGX writes a surface, through its own MMU: the binding process may map a
-     * surface read-only (5.x SpringBoard's layer surfaces: every store faulted, the
-     * kernel returned without making the page writable, and the frame was dropped).
-     */
     for (unsigned row = 0; row < s->height; row++) {
         unsigned from = s->window ? s->height - 1 - row : row;
         const uint8_t *src = pixels + (size_t)from * s->width * bpp;
@@ -4702,6 +4666,211 @@ static int gles_surface_writeback(CPUState *cpu, GLuint texture, GLESSurface *s)
             done += n;
         }
     }
+    return 0;
+}
+
+static void gles_surface_trace(GLuint texture, GLESSurface *s, const uint8_t *pixels, unsigned bpp)
+{
+    if (trace_event_get_state_backends(TRACE_GLES_SURFACE_LOG)) {
+        static unsigned traced;
+        uint64_t sum = 0;
+        for (size_t i = 0; i < (size_t)s->width * s->height * bpp; i += 97) sum += pixels[i];
+        if (traced++ < 40) TRACE_PRINTF(trace_gles_surface_log, "[gles] sync surface tex %d -> %08x %ux%u sample-sum %" PRIu64 "\n",
+                                   texture, s->base, s->width, s->height, sum);
+    }
+}
+
+#ifdef GLES_HOST_ANGLE
+/*
+ * The frame-end writeback, read back asynchronously. A glReadPixels of CA's 640x960
+ * display surface into memory took 2.2-2.9 ms at the glBindFramebuffer(0) that ends
+ * its frame: up to 1 ms waiting for the GPU to draw the frame, ~1.6 ms more in
+ * ANGLE's D3D11 staging copy and map with the GPU idle, 0.3 ms the copy into guest
+ * RAM (docs/windows-gl.md). Read into a pixel-pack buffer instead: ANGLE only queues
+ * a GPU copy into its staging texture, and the buffer is mapped later, at the
+ * display's next VBL (gles_host_writeback_sync, before it latches the swap, so a
+ * partial or stale frame is still never scanned out), or before the bridge reads
+ * that memory again, or at the next frame end. By the VBL the GPU is done and the
+ * vCPU is usually idle in wfi.
+ *
+ * Only for a surface the display has scanned out (gles_host_note_scanout: CA's
+ * display surfaces), which nothing but the display reads: any other surface, an app
+ * snapshot that the guest CPU reads after its glFinish, is still written back at
+ * once (a page of the last eight latched reused for such a surface would land by the
+ * next VBL instead). One frame in flight, from an ES 3.0 context (CA's), of a 32-bit surface whose
+ * pages are known (so the late write cannot fault). IT_GLES_WB_SYNC=1 keeps every
+ * writeback synchronous.
+ */
+typedef struct {
+    GLESHost *state;    /* the context whose pack buffer holds the frame; NULL: none */
+    GLuint texture;
+    CPUState *cpu;
+    GLESSurface *s;     /* a copy of the surface: geometry and pages */
+} GLESWriteback;
+static GLESWriteback gles_wb;
+/* The RAM pages the display latched layers from (their first), newest last: CA rotates three. */
+static ram_addr_t gles_scanout[8];
+static unsigned gles_n_scanout;
+
+static bool gles_wb_async(GLESSurface *s, unsigned bpp)
+{
+    static int sync = -1;
+
+    if (sync < 0) sync = getenv("IT_GLES_WB_SYNC") && atoi(getenv("IT_GLES_WB_SYNC")) > 0;
+    if (sync || !angle_es2 || bpp != 4 || !s->npages || gles_wb.state) return false;
+    for (unsigned i = 0; i < MIN(gles_n_scanout, ARRAY_SIZE(gles_scanout)); i++) {
+        if (gles_scanout[i] == s->pages[0]) return true;
+    }
+    return false;
+}
+
+/* The frame in flight into guest memory, mapped in the context that read it. */
+static void gles_wb_finish(void)
+{
+    GLESWriteback wb = gles_wb;
+    GLESHost *prev = gh_current;
+    bool call_log = trace_event_get_state_backends(TRACE_GLES_CALL_LOG);
+    int64_t t0 = gles_obj_stats > 0 || call_log ? g_get_monotonic_time() : 0;
+
+    if (!wb.state) return;
+    gles_wb.state = NULL;
+    gh_current = wb.state;
+    gles_platform_make_current();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, gh.wb_pbo);
+    const uint8_t *pixels = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0,
+                                             (size_t)wb.s->width * wb.s->height * 4, GL_MAP_READ_BIT);
+    if (pixels) {
+        gles_surface_trace(wb.texture, wb.s, pixels, 4);
+        gles_surface_store(wb.cpu, wb.s, pixels, 4);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        /* As the synchronous writeback: aliases see a new generation, the texture holds it. */
+        gles_surface_changed(wb.s);
+        GLESSurface *live = gh.surfaces ? g_hash_table_lookup(gh.surfaces, GUINT_TO_POINTER(wb.texture)) : NULL;
+        if (live && live->base == wb.s->base) live->gen = gles_gen;
+    } else {
+        gles_refuse("surface:writeback:map");
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gh_current = prev;
+    gles_platform_make_current();
+    g_free(wb.s);
+    if (t0 && gles_obj_stats > 0) gles_us_wb += g_get_monotonic_time() - t0;
+    /* -trace gles_call_log: when the frame landed and its host microseconds, as a call's line. */
+    if (call_log) {
+        TRACE_PRINTF(trace_gles_call_log, "[gles-wb] %" PRId64 " landed tex %u host %" PRId64 "\n",
+                     qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), wb.texture, g_get_monotonic_time() - t0);
+    }
+}
+
+static void gles_wb_finish_work(CPUState *cpu, run_on_cpu_data data)
+{
+    gles_wb_finish();
+}
+#endif
+
+/* Called by a display model before it reads scanout memory (s5l8930_display, at each VBL):
+ * the frame in flight lands first. The GL contexts are current on the vCPU thread that
+ * made the calls, so from the main loop the work runs there. */
+void gles_host_writeback_sync(void)
+{
+#ifdef GLES_HOST_ANGLE
+    if (!gles_wb.state) return;
+    if (qemu_cpu_is_self(gles_wb.cpu)) {
+        gles_wb_finish();
+    } else {
+        run_on_cpu(gles_wb.cpu, gles_wb_finish_work, RUN_ON_CPU_NULL);
+    }
+#endif
+}
+
+/* A display model latched a layer whose first byte is at guest physical `pa`. */
+void gles_host_note_scanout(uint64_t pa)
+{
+#ifdef GLES_HOST_ANGLE
+    hwaddr xlat, len = 1;
+    ram_addr_t ram;
+
+    RCU_READ_LOCK_GUARD();
+    MemoryRegion *mr = address_space_translate(&address_space_memory, pa, &xlat, &len, false,
+                                               MEMTXATTRS_UNSPECIFIED);
+    if (!memory_region_is_ram(mr)) return;
+    ram = (memory_region_get_ram_addr(mr) + xlat) & TARGET_PAGE_MASK;
+    for (unsigned i = 0; i < MIN(gles_n_scanout, ARRAY_SIZE(gles_scanout)); i++) {
+        if (gles_scanout[i] == ram) return;
+    }
+    gles_scanout[gles_n_scanout++ % ARRAY_SIZE(gles_scanout)] = ram;
+#endif
+}
+
+/* Texture `texture`'s pixels into its surface's guest memory; at a frame end
+ * (`async`), maybe later (gles_wb). */
+static int gles_surface_writeback(CPUState *cpu, GLuint texture, GLESSurface *s, bool async)
+{
+    GLint pack = 4, framebuffer = 0;
+    bool rgb555 = s->format == GLES_SURFACE_RGB555;
+    unsigned bpp = (s->format == GLES_SURFACE_RGB565 || rgb555) ? 2 : 4;
+    g_autofree uint8_t *pixels = NULL;
+
+#ifdef GLES_HOST_ANGLE
+    async = async && gles_wb_async(s, bpp);
+#else
+    async = false;
+#endif
+    /* Read through a scratch framebuffer: the texture is no longer the bound
+     * target by the time its frame is flushed. */
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
+    if (!gh.sync_fbo) gh.sync_fbo = gles_private_name(glIsFramebufferEXT);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, gh.sync_fbo);
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, s->target, texture, 0);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+#ifdef GLES_HOST_ANGLE
+    if (async) {
+        size_t size = (size_t)s->width * s->height * 4;
+        /* The guest's buffer objects are emulated: no host buffer name is the guest's. */
+        if (!gh.wb_pbo) glGenBuffers(1, &gh.wb_pbo);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, gh.wb_pbo);
+        if (gh.wb_pbo_size != size) {
+            glBufferData(GL_PIXEL_PACK_BUFFER, size, NULL, GL_STREAM_READ);
+            gh.wb_pbo_size = size;
+        }
+        glReadPixels(0, 0, s->width, s->height, s->format == GLES_SURFACE_RGBA32 ? GL_RGBA : GL_BGRA,
+                     GL_UNSIGNED_BYTE, NULL);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    } else
+#endif
+    {
+        pixels = g_malloc((size_t)s->width * s->height * 4);
+        glReadPixels(0, 0, s->width, s->height,
+            bpp == 2 && !rgb555 ? GL_RGB : s->format == GLES_SURFACE_RGBA32 ? GL_RGBA : GL_BGRA,
+            bpp == 2 && !rgb555 ? GL_UNSIGNED_SHORT_5_6_5 : GL_UNSIGNED_BYTE, pixels);
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, pack);
+    glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, s->target, 0, 0);
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, framebuffer);
+    if (glGetError() != GL_NO_ERROR) {
+        gles_refuse("surface:writeback");
+        s->dirty = false;
+        return -1;
+    }
+#ifdef GLES_HOST_ANGLE
+    if (async) {
+        gles_wb = (GLESWriteback){ gh_current, texture, cpu,
+                                   g_memdup2(s, sizeof(*s) + s->npages * sizeof(ram_addr_t)) };
+        s->dirty = false;
+        return 0;
+    }
+#endif
+    if (rgb555) {
+        for (size_t i = 0; i < (size_t)s->width * s->height; i++) {
+            unsigned value = (pixels[i * 4] >> 3) |
+                ((pixels[i * 4 + 1] >> 3) << 5) | ((pixels[i * 4 + 2] >> 3) << 10);
+            pixels[i * 2] = value;
+            pixels[i * 2 + 1] = value >> 8;
+        }
+    }
+    gles_surface_trace(texture, s, pixels, bpp);
+    if (gles_surface_store(cpu, s, pixels, bpp)) return -1;
     s->dirty = false;
     /* Our own write: its aliases see a new generation, this texture already holds it. */
     gles_surface_changed(s);
@@ -4710,20 +4879,29 @@ static int gles_surface_writeback(CPUState *cpu, GLuint texture, GLESSurface *s)
 }
 
 /* Write every rendered-into surface back to the guest (base == 0), or the ones at
- * `base` before that memory is read again. -1 with a page fault pending: the call
- * is reissued and the rest stays dirty. */
-static int gles_surface_flush(CPUState *cpu, uint32_t base)
+ * `base` before that memory is read again; a frame end's (`async`) may land later
+ * (gles_wb), anything else waits for the frame in flight too. -1 with a page fault
+ * pending: the call is reissued and the rest stays dirty. */
+static int gles_surface_flush(CPUState *cpu, uint32_t base, bool async)
 {
     GHashTableIter it;
     gpointer key, value;
 
+#ifdef GLES_HOST_ANGLE
+    /* Not at a frame end (CA's glFinish follows its glBindFramebuffer(0) at once): the
+     * display is the frame's only reader, and lands it. */
+    if (gles_wb.state && (base ? gles_wb.s->base == base : !async)) gles_wb_finish();
+#endif
     if (!gh.surfaces) return 0;
     g_hash_table_iter_init(&it, gh.surfaces);
     while (g_hash_table_iter_next(&it, &key, &value)) {
         GLESSurface *s = value;
         if (s->dirty && (!base || s->base == base)) {
+#ifdef GLES_HOST_ANGLE
+            if (async && !base && gles_wb.state) gles_wb_finish();  /* the frame before lands first */
+#endif
             int64_t t0 = gles_obj_stats > 0 ? g_get_monotonic_time() : 0;
-            int r = gles_surface_writeback(cpu, GPOINTER_TO_UINT(key), s);
+            int r = gles_surface_writeback(cpu, GPOINTER_TO_UINT(key), s, async && !base);
             if (t0) {
                 gles_us_wb += g_get_monotonic_time() - t0;
                 gles_n_wb++;
@@ -4773,6 +4951,9 @@ static bool gles_refresh_surfaces_1(CPUState *cpu)
             if (!name || name == attachment) continue;
             GLESSurface *surface = g_hash_table_lookup(gh.surfaces, GUINT_TO_POINTER(name));
             if (!surface || surface->dirty || surface->detached) continue;
+#ifdef GLES_HOST_ANGLE
+            if (gles_wb.state && gles_wb.s->base == surface->base) gles_wb_finish();   /* sampled: its frame lands first */
+#endif
             if (surface->npages) {      /* re-read only memory written since its upload */
                 if (!gles_surface_changed(surface)) continue;
                 if (!gles_surface_mapped(cpu, surface)) {
@@ -6970,12 +7151,20 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
     }
 
     case GLES_SLOT_FINISH:
+#ifdef GLES_HOST_ANGLE
+        /* What the guest can see of the host's work is guest memory, and every way there
+         * waits for the GPU itself (glReadPixels, the writeback's map): waiting here as
+         * well cost CA's frame ~0.9 ms. */
+        glFlush();
+        return gles_sync_surface(cpu) ? -1 : gles_surface_flush(cpu, 0, true);
+#else
         glFinish();
-        return gles_sync_surface(cpu) ? -1 : gles_surface_flush(cpu, 0);
+        return gles_sync_surface(cpu) ? -1 : gles_surface_flush(cpu, 0, false);
+#endif
 
     case GLES_SLOT_FLUSH:
         glFlush();
-        return gles_sync_surface(cpu) ? -1 : gles_surface_flush(cpu, 0);
+        return gles_sync_surface(cpu) ? -1 : gles_surface_flush(cpu, 0, true);
 
     case GLES_SLOT_GET_ERROR: {
         GLenum error = gh.error;
@@ -7149,7 +7338,7 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
          * mid-frame switches are between two FBOs and stay deferred. A failed
          * write keeps the surface marked for the next flush; a batched bind has
          * no fault to raise. */
-        if (!a[1]) gles_surface_flush(cpu, 0);
+        if (!a[1]) gles_surface_flush(cpu, 0, true);
         /*
          * Leaving an offscreen target that was drawn into: say what it
          * actually CONTAINS. A render-to-texture pass that runs, reports no
@@ -7430,6 +7619,16 @@ static void gles_group_unref(GLESGroup *group)
 static void gles_context_free(GLESHost *state)
 {
     GLESArray *arrays[] = { &state->vertex, &state->color, &state->normal, &state->pointsize };
+#ifdef GLES_HOST_ANGLE
+    if (gles_wb.state == state) {       /* its pack buffer goes with it: land the frame, or drop it at a reset */
+        if (qemu_cpu_is_self(gles_wb.cpu)) {
+            gles_wb_finish();
+        } else {
+            g_free(gles_wb.s);
+            gles_wb.state = NULL;
+        }
+    }
+#endif
     for (unsigned i = 0; i < ARRAY_SIZE(arrays); i++) {
         gles_buffer_destroy(arrays[i]->vbo);
         g_free(arrays[i]->buf); g_free(arrays[i]->fbuf);
@@ -7454,6 +7653,9 @@ static void gles_context_free(GLESHost *state)
         glDeleteFramebuffersEXT(1, &state->fbo);
         if (state->sync_fbo) glDeleteFramebuffersEXT(1, &state->sync_fbo);
         if (state->copy_fbo) glDeleteFramebuffersEXT(1, &state->copy_fbo);
+#ifdef GLES_HOST_ANGLE
+        if (state->wb_pbo) glDeleteBuffers(1, &state->wb_pbo);
+#endif
         glDeleteTextures(1, &state->tex);
         glDeleteRenderbuffersEXT(1, &state->depth);
         CGLSetCurrentContext(NULL);
@@ -7564,6 +7766,9 @@ void gles_host_reset(void)
 #if !defined(GLES_HOST_EAGL) || defined(GLES_HOST_ANGLE)
     gles_snapshot_register();
     gles_drop_all();
+#endif
+#ifdef GLES_HOST_ANGLE
+    gles_n_scanout = 0;
 #endif
 }
 

@@ -43,3 +43,5 @@ char *gles_host_rejects(void) { return g_strdup(""); }
 void gles_host_set_debug(bool on) { }
 bool gles_host_debug(void) { return false; }
 uint64_t gles_host_ram_gen(uint64_t addr, uint64_t len) { return 0; }
+void gles_host_writeback_sync(void) { }
+void gles_host_note_scanout(uint64_t pa) { }

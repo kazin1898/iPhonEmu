@@ -425,6 +425,13 @@ bool gles_host_debug(void);
  * VGA dirty bits of every surface page it checks (its own write-backs included), so a display
  * model that scans such pages out through the dirty log compares this too, or misses frames. */
 uint64_t gles_host_ram_gen(uint64_t addr, uint64_t len);
+/* The bridge may write a scanout surface's frame back after the call that ended the
+ * frame (asynchronous readback). A display model that names the memory it latches
+ * (gles_host_note_scanout, the guest physical address of a swapped layer's first byte)
+ * calls gles_host_writeback_sync, under the BQL, before it reads that memory, and the
+ * frame in flight lands first. Surfaces never named are written back synchronously. */
+void gles_host_note_scanout(uint64_t pa);
+void gles_host_writeback_sync(void);
 #endif
 
 #endif /* HW_ARM_GUEST_SERVICES_GLES_H */
