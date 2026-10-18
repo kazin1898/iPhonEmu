@@ -402,10 +402,10 @@ static void vbl_tick(void *opaque)
      * animation ever needs measuring. */
     frame_timeline_record(&s->ftl, s->pipe[0].swap_id, new_frame);
     if (s->pipe[0].swap_pending) {
-        s->pipe[0].swap_pending = false;
         s->quiet_vbls = 0;
         s->swaps++;
-        front_latch(s);
+        front_latch(s);     /* still pending here: front_latch traces the swap's summary */
+        s->pipe[0].swap_pending = false;
     } else if (++s->quiet_vbls >= QUIET_RELATCH_VBLS) {
         /*
          * No swap for a quarter second, yet the buffer can still change:
@@ -676,7 +676,8 @@ static bool scanout_layer(S5L8930DisplayState *s, int layer, unsigned w, unsigne
         unsigned row = u->sw * (u->fmt ? 2 : 4);
         u->stride = (v >> 4) >= row ? v >> 4 : v;
     }
-    return u->base != 0;
+    /* Through the H4P layer MMU the base is an address in the layer's own space: backboardd's swaps program 0. */
+    return u->base != 0 || u->mmu;
 }
 
 static size_t layer_row_bytes(const UILayer *u)
@@ -912,10 +913,12 @@ static void front_latch(S5L8930DisplayState *s)
         uint32_t *r = s->pipe[0].regs;
         if (n++ < 400) {
             TRACE_PRINTF(trace_s5l8930_display_log, "[disp] swap %u: layers=%08x %ux%u "
-                    "(raw %08x/%08x) ui0=%08x ui1=%08x\n", s->pipe[0].swap_id,
+                    "(raw %08x/%08x) ui0=%08x ui1=%08x mmu %08x/%08x pt0 %08x/%08x\n", s->pipe[0].swap_id,
                     r[DP_LAYERS / 4], w, h,
                     r[(DP_UI_BASE(0) + DP_UI_STRIDE) / 4], r[(DP_UI_BASE(1) + DP_UI_STRIDE) / 4],
-                    r[(DP_UI_BASE(0) + DP_UI_ADDR) / 4], r[(DP_UI_BASE(1) + DP_UI_ADDR) / 4]);
+                    r[(DP_UI_BASE(0) + DP_UI_ADDR) / 4], r[(DP_UI_BASE(1) + DP_UI_ADDR) / 4],
+                    r[(DP_UI_BASE(0) + DP_H4P_UI_MMU_CTRL) / 4], r[(DP_UI_BASE(1) + DP_H4P_UI_MMU_CTRL) / 4],
+                    r[(DP_UI_BASE(0) + DP_H4P_UI_MMU_PT) / 4], r[(DP_UI_BASE(1) + DP_H4P_UI_MMU_PT) / 4]);
         }
     }
     need = (size_t)w * h * 4;
