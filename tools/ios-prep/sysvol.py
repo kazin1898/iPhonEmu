@@ -6,7 +6,8 @@ is edited is launchd's job plists, the way qemu-ios does for the A4 boards (docs
 
 - `console`: the job's stdout and stderr to /dev/console, so a daemon's own messages ride the serial
   console (CoreAnimation's and backboardd's complaints are stderr; the console is `crw--w--w-`, so
-  `mobile` can append).
+  `mobile` can append). A path instead sends them to a file: on the data volume, its text can be read
+  back from the NAND page store, which keeps the pages in the clear (XOR 0xff).
 - `env`: an EnvironmentVariables entry, e.g. CA_ENABLE_OGL=0 for QuartzCore's software renderer.
 
 The plists stay binary (launchd reads either). The IPSW's root has no free block and its small files are
@@ -25,8 +26,8 @@ def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disa
     """Edit the launchd jobs `jobs` (labels) on `rootfs`; returns {label: new plist dict}. `program`
     replaces the job's ProgramArguments (a stock binary of the system volume, e.g. /bin/launchctl list,
     whose job table on the console tells which daemons run and how the last ones exited) and `interval`
-    sets StartInterval, launchd re-running the job every that many seconds. `disabled` True or False
-    sets the plist's Disabled key: a disabled job is not loaded and its Mach services are not
+    sets StartInterval, launchd re-running the job every that many seconds. `disabled` True sets the
+    plist's Disabled key, False removes it (the stock plists have none): a disabled job is not loaded and its Mach services are not
     registered, so a client's lookup fails at once instead of waiting on a daemon that never answers."""
     out = {}
     v = hfs.Volume(rootfs, writable=True)
@@ -37,8 +38,9 @@ def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disa
             path = JOBS % label
             d = plistlib.loads(v.read_file(path))
             if console:
-                d["StandardOutPath"] = "/dev/console"
-                d["StandardErrorPath"] = "/dev/console"
+                dest = console if isinstance(console, str) else "/dev/console"
+                d["StandardOutPath"] = dest
+                d["StandardErrorPath"] = dest
             for kv in env:
                 k, _, val = kv.partition("=")
                 d.setdefault("EnvironmentVariables", {})[k] = val
@@ -47,8 +49,10 @@ def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disa
                 d["ProgramArguments"] = list(program)
             if interval:
                 d["StartInterval"] = int(interval)
-            if disabled is not None:
-                d["Disabled"] = bool(disabled)
+            if disabled:
+                d["Disabled"] = True
+            elif disabled is not None:
+                d.pop("Disabled", None)     # back to the stock job, which has no such key
             v.set_file_data(path, plistlib.dumps(d, fmt=plistlib.FMT_BINARY))
             out[label] = d
     finally:

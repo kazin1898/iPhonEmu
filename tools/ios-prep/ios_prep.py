@@ -313,6 +313,8 @@ def cmd_sysvol(args):
     if args.asl_console:
         sysvol.asl_console(rootfs)
         log(f"{rootfs}: asl.conf copies every message to /dev/console")
+    if args.output:
+        args.console = args.output
     if args.show or not (args.console or args.env or args.program or args.interval or args.disable is not None):
         jobs = sysvol.show_jobs(rootfs, args.job)
     else:
@@ -392,6 +394,8 @@ def main():
     p.add_argument("--job", action="append", default=[], metavar="LABEL",
                    help="a launchd job label (repeatable), e.g. com.apple.backboardd")
     p.add_argument("--console", action="store_true", help="the jobs' stdout and stderr to /dev/console")
+    p.add_argument("--output", metavar="PATH", help="the jobs' stdout and stderr to this file in the guest instead "
+                   "(on /private/var, readable back from the NAND pages)")
     p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                    help="an EnvironmentVariables entry for the jobs (repeatable), e.g. CA_ENABLE_OGL=0")
     p.add_argument("--program", nargs="+", metavar="ARG",

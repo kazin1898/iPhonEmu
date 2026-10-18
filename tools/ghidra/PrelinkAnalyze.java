@@ -1,4 +1,4 @@
-﻿// Disassemble prelinked kexts' __text sections as Thumb and run the (fast) analyzers, so their functions
+// Disassemble prelinked kexts' __text sections as Thumb and run the (fast) analyzers, so their functions
 // exist for DecompileAt. Reads ranges "0xVA 0xSIZE" per line from the file given as the script argument.
 // The slow whole-program passes (Decompiler Parameter ID, Stack, Decompiler Switch Analysis) are turned
 // off: on this kernelcache they ran for over an hour.
