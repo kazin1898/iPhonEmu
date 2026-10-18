@@ -313,14 +313,14 @@ def cmd_sysvol(args):
     if args.asl_console:
         sysvol.asl_console(rootfs)
         log(f"{rootfs}: asl.conf copies every message to /dev/console")
-    if args.show or not (args.console or args.env or args.program or args.interval):
+    if args.show or not (args.console or args.env or args.program or args.interval or args.disable is not None):
         jobs = sysvol.show_jobs(rootfs, args.job)
     else:
         jobs = sysvol.edit_jobs(rootfs, args.job, console=args.console, env=args.env,
-                                program=args.program, interval=args.interval)
+                                program=args.program, interval=args.interval, disabled=args.disable)
         log(f"{rootfs}: {len(jobs)} job(s) rewritten; the guest reads them at its next boot")
     for label, d in jobs.items():
-        print(label, {k: d[k] for k in ("ProgramArguments", "StartInterval", "StandardOutPath",
+        print(label, {k: d[k] for k in ("Disabled", "ProgramArguments", "StartInterval", "StandardOutPath",
                                         "StandardErrorPath", "EnvironmentVariables") if k in d})
 
 
@@ -399,6 +399,9 @@ def main():
                         "launchd's job table, with PIDs and last exit statuses, on the console)")
     p.add_argument("--interval", type=int, default=0, metavar="SECS",
                    help="StartInterval: launchd re-runs the jobs every SECS seconds")
+    p.add_argument("--disable", type=lambda s: s.lower() in ("1", "true", "yes", "on"), metavar="BOOL",
+                   help="the plist's Disabled key (true: launchd neither loads the job nor registers its Mach "
+                        "services; false: back on)")
     p.add_argument("--asl-console", action="store_true",
                    help="asl.conf: syslogd copies every message to /dev/console (the daemons' log on the serial console)")
     p.add_argument("--show", action="store_true", help="print the jobs as they are, change nothing")
