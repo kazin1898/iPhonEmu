@@ -170,6 +170,14 @@ s5l8940_iop_ring(int handle, uint32_t ring, uint32_t count) "ring %d at %08x, %u
 s5l8940_iop_ctrl_msg(uint32_t op, uint32_t status) "control message %08x -> status %u"
 s5l8940_iop_fmi_cmd(int bus, uint32_t op, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t status) "fmi%d op %u args %08x %08x %08x %08x -> status %08x"
 s5l8940_iop_log(const char *msg) "%s"
+
+# s5l8940_ae2.c
+s5l8940_ae2_reg_write(const char *blk, uint32_t off, uint32_t val) "%s [%03x] <- %08x"
+s5l8940_ae2_run(uint32_t fw_base, uint32_t cfg) "firmware at %08x, cnfg at %08x"
+s5l8940_ae2_doorbell(int served) "doorbell: %d items answered"
+s5l8940_ae2_ring(int handle, uint32_t ring, uint32_t count) "ring %d at %08x, %u entries"
+s5l8940_ae2_ctrl_msg(uint32_t op, uint32_t status) "control message %08x -> status %u"
+s5l8940_ae2_msg(int handle, uint32_t item, uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3, uint32_t w4, uint32_t w5, uint32_t w6, uint32_t w7) "ep%d item %08x: %08x %08x %08x %08x %08x %08x %08x %08x"
 s5l8940_d1881_read(uint8_t reg, uint8_t val) "reg %02x -> %02x"
 s5l8940_d1881_write(uint8_t reg, uint8_t val) "reg %02x <- %02x"
 s5l8930_display_log(const char *msg) "%s"

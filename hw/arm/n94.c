@@ -285,6 +285,36 @@ static void n94_init(MachineState *machine)
     qdev_connect_gpio_out_named(s->aic, "doorbell", 0, qdev_get_gpio_in_named(dev, "doorbell", 0));
 
     /*
+     * The AE2 audio coprocessor, high-level (hw/arm/s5l8940_ae2.c): AppleA5AE2's control block,
+     * mailbox, power and configuration blocks and SRAM, its interrupt on AIC 97. Every audio path
+     * on the A5 goes through it, and mediaserverd's audio session waits for that path.
+     */
+    dev = qdev_new(TYPE_S5L8940_AE2);
+    sbd = SYS_BUS_DEVICE(dev);
+    sysbus_realize_and_unref(sbd, &error_fatal);
+    sysbus_mmio_map(sbd, 0, S5L8940_AE2_CTRL_BASE);
+    sysbus_mmio_map(sbd, 1, S5L8940_AE2_MBOX_BASE);
+    sysbus_mmio_map(sbd, 2, S5L8940_AE2_PWR_BASE);
+    sysbus_mmio_map(sbd, 3, S5L8940_AE2_CFG_BASE);
+    sysbus_mmio_map(sbd, 4, S5L8940_AE2_SRAM_BASE);
+    sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_AE2));
+
+    /*
+     * I2S0-3, the A4's Samsung block (hw/arm/s5l8930_i2s.c) at the A5's bases (i2s-version 3).
+     * AppleSamsungI2S's stop path writes +0x00 <- 0x34 and spins on bit 1 ("drained") with
+     * IODelay; on the unimplemented window it pinned the CPU from the codec's start on.
+     * ponytail: register files with no host audio yet; give i2s0 "audio-out" once the AE2
+     * path carries PCM.
+     */
+    for (i = 0; i < 4; i++) {
+        dev = qdev_new(TYPE_S5L8930_I2S);
+        qdev_prop_set_uint8(dev, "port", i);
+        sbd = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, S5L8940_I2S_BASE(i));
+    }
+
+    /*
      * I2C controllers (i2c,s5l8940x; hw/arm/s5l8940_i2c.c) and the DT's slaves.
      * The PMU driver's first read of the D1881 at 0x74 timing out on an
      * unimplemented block was a kernel panic, and with the bus there but

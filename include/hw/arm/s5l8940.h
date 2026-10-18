@@ -96,6 +96,18 @@ void s5l8940_aic_sw_set(DeviceState *dev, unsigned vector);
  * the AIC's "doorbell" output). Answers the EmbeddedIOP rings in guest DRAM.
  */
 #define TYPE_S5L8940_IOP "s5l8940.iop"
+/*
+ * AE2, the audio coprocessor (hw/arm/s5l8940_ae2.c), high-level: MMIO 0 control block, 1 mailbox,
+ * 2 power/clock block, 3 configuration block, 4 SRAM; sysbus IRQ 0 its interrupt to the AP (DT ae2
+ * interrupts[0]). Answers the EmbeddedIOP rings of AppleA5AE2's firmware in guest DRAM.
+ */
+#define TYPE_S5L8940_AE2 "s5l8940.ae2"
+#define S5L8940_AE2_CTRL_BASE    0x341e0000
+#define S5L8940_AE2_MBOX_BASE    0x341e1000
+#define S5L8940_AE2_PWR_BASE     0x341a0000
+#define S5L8940_AE2_CFG_BASE     0x341c1000
+#define S5L8940_AE2_SRAM_BASE    0x34000000
+#define S5L8940_IRQ_AE2          97
 
 /* I2C controller (hw/arm/s5l8940_i2c.c): MMIO 0 (0x1000), sysbus IRQ 0, child bus "i2c". */
 #define TYPE_S5L8940_I2C "s5l8940.i2c"
