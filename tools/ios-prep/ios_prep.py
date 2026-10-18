@@ -313,13 +313,15 @@ def cmd_sysvol(args):
     if args.asl_console:
         sysvol.asl_console(rootfs)
         log(f"{rootfs}: asl.conf copies every message to /dev/console")
-    if args.show or not (args.console or args.env):
+    if args.show or not (args.console or args.env or args.program or args.interval):
         jobs = sysvol.show_jobs(rootfs, args.job)
     else:
-        jobs = sysvol.edit_jobs(rootfs, args.job, console=args.console, env=args.env)
+        jobs = sysvol.edit_jobs(rootfs, args.job, console=args.console, env=args.env,
+                                program=args.program, interval=args.interval)
         log(f"{rootfs}: {len(jobs)} job(s) rewritten; the guest reads them at its next boot")
     for label, d in jobs.items():
-        print(label, {k: d[k] for k in ("StandardOutPath", "StandardErrorPath", "EnvironmentVariables") if k in d})
+        print(label, {k: d[k] for k in ("ProgramArguments", "StartInterval", "StandardOutPath",
+                                        "StandardErrorPath", "EnvironmentVariables") if k in d})
 
 
 def cmd_inventory(args):
@@ -392,6 +394,11 @@ def main():
     p.add_argument("--console", action="store_true", help="the jobs' stdout and stderr to /dev/console")
     p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
                    help="an EnvironmentVariables entry for the jobs (repeatable), e.g. CA_ENABLE_OGL=0")
+    p.add_argument("--program", nargs="+", metavar="ARG",
+                   help="the jobs' ProgramArguments, a stock binary of the system volume (e.g. /bin/launchctl list: "
+                        "launchd's job table, with PIDs and last exit statuses, on the console)")
+    p.add_argument("--interval", type=int, default=0, metavar="SECS",
+                   help="StartInterval: launchd re-runs the jobs every SECS seconds")
     p.add_argument("--asl-console", action="store_true",
                    help="asl.conf: syslogd copies every message to /dev/console (the daemons' log on the serial console)")
     p.add_argument("--show", action="store_true", help="print the jobs as they are, change nothing")

@@ -21,8 +21,11 @@ JOBS = "/System/Library/LaunchDaemons/%s.plist"
 DONOR = "/usr/standalone/update/ramdisk/H4SURamDisk.dmg"     # used only by an OTA update
 
 
-def edit_jobs(rootfs, jobs, console=True, env=(), donor=DONOR):
-    """Edit the launchd jobs `jobs` (labels) on `rootfs`; returns {label: new plist dict}."""
+def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, donor=DONOR):
+    """Edit the launchd jobs `jobs` (labels) on `rootfs`; returns {label: new plist dict}. `program`
+    replaces the job's ProgramArguments (a stock binary of the system volume, e.g. /bin/launchctl list,
+    whose job table on the console tells which daemons run and how the last ones exited) and `interval`
+    sets StartInterval, launchd re-running the job every that many seconds."""
     out = {}
     v = hfs.Volume(rootfs, writable=True)
     try:
@@ -37,6 +40,11 @@ def edit_jobs(rootfs, jobs, console=True, env=(), donor=DONOR):
             for kv in env:
                 k, _, val = kv.partition("=")
                 d.setdefault("EnvironmentVariables", {})[k] = val
+            if program:
+                d.pop("Program", None)
+                d["ProgramArguments"] = list(program)
+            if interval:
+                d["StartInterval"] = int(interval)
             v.set_file_data(path, plistlib.dumps(d, fmt=plistlib.FMT_BINARY))
             out[label] = d
     finally:
