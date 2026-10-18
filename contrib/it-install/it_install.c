@@ -394,9 +394,10 @@ static void populate_data(int con)
 {
     static const char *const fsck[] = { "fsck_hfs", "-fy", DATA_DEV, 0 };
     static const char *const mount[] = { "mount_hfs", DATA_BDEV, DATA_MNT, 0 };
+    static const char *const newfs[] = { "newfs_hfs", "-s", "-J", "-v", "Data", DATA_DEV, 0 };
     static const char *const keybag[] = { "it_keybag", 0 };
     static const char *const dirs[] = {
-        "/db", "/db/timezone", "/empty", "/folders", "/keybags", "/log", "/logs", "/logs/CrashReporter",
+        "/db", "/db/timezone", "/empty", "/folders", "/keybags", "/log", "/log/asl", "/logs", "/logs/CrashReporter",
         "/msgs", "/preferences", "/preferences/SystemConfiguration", "/root", "/root/Library", "/run",
         "/spool", "/vm", "/wireless", "/wireless/Library", "/wireless/Library/Preferences", "/Keychains",
         "/MobileDevice", "/MobileDevice/ProvisioningProfiles", "/Managed Preferences",
@@ -411,8 +412,13 @@ static void populate_data(int con)
 
     run(con, "/sbin/fsck_hfs", fsck);        /* a volume the last boot left mounted needs its journal replayed */
     if (run(con, "/sbin/mount_hfs", mount) != 0) {
-        say(con, "it_install: mount_hfs failed, data volume left empty\n");
-        return;
+        /* Past repair (an emulator quit mid-write before the volume was journaled): made anew, as a
+         * restore would make it; the keybag step below then creates a new system keybag for it. */
+        say(con, "it_install: mount_hfs failed, newfs_hfs Data again\n");
+        if (run(con, "/sbin/newfs_hfs", newfs) != 0 || run(con, "/sbin/mount_hfs", mount) != 0) {
+            say(con, "it_install: data volume left empty\n");
+            return;
+        }
     }
     for (i = 0; dirs[i]; i++) {
         const char *d = dirs[i];
@@ -450,7 +456,9 @@ static void populate_data(int con)
 
 __attribute__((section(".text.start"), noreturn)) void _start(void)
 {
-    static const char *const newfs[] = { "newfs_hfs", "-s", "-v", "Data", DATA_DEV, 0 };
+    /* Journaled (-J): the emulator is quit without a guest shutdown, and the journal is what keeps the
+     * volume mountable after that (an unjournaled one went past fsck's repair once). */
+    static const char *const newfs[] = { "newfs_hfs", "-s", "-J", "-v", "Data", DATA_DEV, 0 };
     uint8_t buf[CHUNK * BLOCK] __attribute__((aligned(16)));
     uint64_t blocks = 0;
     uint32_t bsize = 0, i, n, chunk;
