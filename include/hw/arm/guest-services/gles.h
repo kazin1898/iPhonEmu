@@ -402,6 +402,9 @@ int64_t qc_handle_gles(CPUState *cpu, qc_gles_args_t *a);
 int gles_guest_rw(CPUState *cpu, vaddr va, void *buf, size_t len, bool write);
 bool gles_guest_fault_pending(void);
 void qc_gles_dump_stats(void);
+/* -trace gles_obj_log: traps taken (all, GLES_OP_BATCH ones), the calls they carried and
+ * the host microseconds spent in them, since the last call; for gles-host.c's 10 s line. */
+void qc_gles_trap_stats(uint64_t *traps, uint64_t *batches, uint64_t *calls, int64_t *us);
 int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
                        uint32_t argc, const uint32_t *args);
 void gles_host_stats(uint64_t *draws, uint64_t *presents);

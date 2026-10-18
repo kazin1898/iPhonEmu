@@ -22,6 +22,7 @@
 #include "exec/target_page.h"
 #include "exec/tlb-flags.h"
 #include "hw/arm/guest-services/general.h"
+#include "trace.h"
 
 /*
  * Guest memory behind the pointers a GL call hands the host (client arrays,
@@ -168,7 +169,39 @@ static int64_t gles_run_batch(CPUState *cpu, qc_gles_args_t *a)
     return 0;
 }
 
+static int64_t qc_handle_gles_1(CPUState *cpu, qc_gles_args_t *a);
+
+/* -trace gles_obj_log: what the traps cost the host, around the whole request. */
+static uint64_t gles_traps, gles_batch_traps, gles_trap_calls;
+static int64_t gles_us_trap;
+
+void qc_gles_trap_stats(uint64_t *traps, uint64_t *batches, uint64_t *calls, int64_t *us)
+{
+    *traps = gles_traps;
+    *batches = gles_batch_traps;
+    *calls = gles_trap_calls;
+    *us = gles_us_trap;
+    gles_traps = gles_batch_traps = gles_trap_calls = 0;
+    gles_us_trap = 0;
+}
+
 int64_t qc_handle_gles(CPUState *cpu, qc_gles_args_t *a)
+{
+    bool on = trace_event_get_state_backends(TRACE_GLES_OBJ_LOG);
+    int64_t t0 = on ? g_get_monotonic_time() : 0;
+    uint64_t calls = gles_total_calls;
+    int64_t r = qc_handle_gles_1(cpu, a);
+
+    if (on) {
+        gles_traps++;
+        gles_batch_traps += a->slot == GLES_OP_BATCH;
+        gles_trap_calls += gles_total_calls - calls;
+        gles_us_trap += g_get_monotonic_time() - t0;
+    }
+    return r;
+}
+
+static int64_t qc_handle_gles_1(CPUState *cpu, qc_gles_args_t *a)
 {
     if (a->slot == GLES_OP_BATCH) {
         return gles_run_batch(cpu, a);

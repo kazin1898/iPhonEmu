@@ -4580,7 +4580,8 @@ static int64_t gles_bind_surface(CPUState *cpu, const uint32_t *a, uint32_t id)
 }
 
 /* -trace gles_obj_log: host microseconds spent moving IOSurface pixels. */
-static int64_t gles_us_sync, gles_us_refresh, gles_us_call;
+static int64_t gles_us_sync, gles_us_refresh, gles_us_call, gles_us_wb;
+static uint64_t gles_n_wb, gles_wb_bytes;
 static int gles_obj_stats = -1;
 
 static int64_t gles_sync_surface_1(CPUState *cpu);
@@ -4720,8 +4721,17 @@ static int gles_surface_flush(CPUState *cpu, uint32_t base)
     g_hash_table_iter_init(&it, gh.surfaces);
     while (g_hash_table_iter_next(&it, &key, &value)) {
         GLESSurface *s = value;
-        if (s->dirty && (!base || s->base == base) &&
-            gles_surface_writeback(cpu, GPOINTER_TO_UINT(key), s)) return -1;
+        if (s->dirty && (!base || s->base == base)) {
+            int64_t t0 = gles_obj_stats > 0 ? g_get_monotonic_time() : 0;
+            int r = gles_surface_writeback(cpu, GPOINTER_TO_UINT(key), s);
+            if (t0) {
+                gles_us_wb += g_get_monotonic_time() - t0;
+                gles_n_wb++;
+                gles_wb_bytes += (uint64_t)s->width * s->height *
+                    (s->format == GLES_SURFACE_RGB565 || s->format == GLES_SURFACE_RGB555 ? 2 : 4);
+            }
+            if (r) return -1;
+        }
     }
     return 0;
 }
@@ -7638,6 +7648,14 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
             }
             fprintf(stderr, " -> %" PRId64 "\n", r);
         }
+        /* -trace gles_call_log (switchable at run time, trace-event-set-state): every call, at
+         * guest-virtual microseconds, in order with the display's swap lines. */
+        if (trace_event_get_state_backends(TRACE_GLES_CALL_LOG)) {
+            TRACE_PRINTF(trace_gles_call_log, "[gles-call] %" PRId64 " %08x %4u(%u) %x %x %x %x -> %" PRId64 "\n",
+                         qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), ctx, slot, argc,
+                         argc > 0 ? a[0] : 0, argc > 1 ? a[1] : 0, argc > 2 ? a[2] : 0,
+                         argc > 3 ? a[3] : 0, r);
+        }
     }
     if (st0) gles_us_call += g_get_monotonic_time() - st0;
     {
@@ -7646,6 +7664,9 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
          * GL objects the guest created (gen minus delete, all contexts) and the
          * calls/draws/flushes since the last line. For soak tests: a count that
          * only grows is a leak, a flush rate that stalls is a stuck compositor.
+         * A line is printed by the first call after its 10 s: it covers
+         * everything since the line before, so an idle stretch (no GL at all)
+         * folds into the next line instead of showing as zeros.
          */
         static int64_t tex, fbo, rb, buf, prog, next;
         static uint64_t calls, draws, flushes;
@@ -7668,17 +7689,29 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
             case 89: case 90: flushes++; break;
             }
             if (now >= next) {
+                /* The traps around those calls (guest-gles.c) and the frames written
+                 * back to guest memory: the host's whole share of the interval. */
+                uint64_t traps, batches, tcalls;
+                int64_t trap_us;
+                qc_gles_trap_stats(&traps, &batches, &tcalls, &trap_us);
                 if (next) {
-                    TRACE_PRINTF(trace_gles_obj_log, "[gles-obj] live tex=%" PRId64 " fbo=%" PRId64
+                    g_autoptr(GDateTime) dt = g_date_time_new_now_local();
+                    g_autofree char *hms = g_date_time_format(dt, "%H:%M:%S");
+                    TRACE_PRINTF(trace_gles_obj_log, "[gles-obj] %s live tex=%" PRId64 " fbo=%" PRId64
                             " rb=%" PRId64 " buf=%" PRId64 " shader+prog=%" PRId64
                             " | 10s: calls=%" PRIu64 " draws=%" PRIu64
                             " flush=%" PRIu64 " call-ms=%" PRId64 " sync-ms=%" PRId64
-                            " refresh-ms=%" PRId64 "\n", tex, fbo, rb, buf, prog,
+                            " refresh-ms=%" PRId64 " | traps=%" PRIu64 " (batch %" PRIu64
+                            ", %" PRIu64 " calls) trap-ms=%" PRId64 " | writeback=%" PRIu64
+                            " (%" PRIu64 " MB) wb-ms=%" PRId64 "\n", hms, tex, fbo, rb, buf, prog,
                             calls, draws, flushes, gles_us_call / 1000,
-                            gles_us_sync / 1000, gles_us_refresh / 1000);
+                            gles_us_sync / 1000, gles_us_refresh / 1000,
+                            traps, batches, tcalls, trap_us / 1000,
+                            gles_n_wb, gles_wb_bytes >> 20, gles_us_wb / 1000);
                 }
                 calls = draws = flushes = 0;
-                gles_us_call = gles_us_sync = gles_us_refresh = 0;
+                gles_us_call = gles_us_sync = gles_us_refresh = gles_us_wb = 0;
+                gles_n_wb = gles_wb_bytes = 0;
                 next = now + 10 * G_USEC_PER_SEC;
             }
         }
