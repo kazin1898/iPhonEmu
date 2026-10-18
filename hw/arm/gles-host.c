@@ -7605,7 +7605,8 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
     gh.calls++;
     gles_cur_ctx = ctx;
     t0 = gles_t();
-    int64_t st0 = gles_obj_stats > 0 ? g_get_monotonic_time() : 0;
+    bool call_log = trace_event_get_state_backends(TRACE_GLES_CALL_LOG);
+    int64_t st0 = gles_obj_stats > 0 || call_log ? g_get_monotonic_time() : 0;
     if (gles_strict) {
         /*
          * Attribute GL errors to the call that RAISED them.
@@ -7649,15 +7650,17 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
             fprintf(stderr, " -> %" PRId64 "\n", r);
         }
         /* -trace gles_call_log (switchable at run time, trace-event-set-state): every call, at
-         * guest-virtual microseconds, in order with the display's swap lines. */
-        if (trace_event_get_state_backends(TRACE_GLES_CALL_LOG)) {
-            TRACE_PRINTF(trace_gles_call_log, "[gles-call] %" PRId64 " %08x %4u(%u) %x %x %x %x -> %" PRId64 "\n",
+         * guest-virtual microseconds, in order with the display's swap lines, and the host
+         * microseconds it took (the rest of a frame's span is the guest's own time). */
+        if (call_log) {
+            TRACE_PRINTF(trace_gles_call_log, "[gles-call] %" PRId64 " %08x %4u(%u) %x %x %x %x -> %" PRId64
+                         " host %" PRId64 "\n",
                          qemu_clock_get_us(QEMU_CLOCK_VIRTUAL), ctx, slot, argc,
                          argc > 0 ? a[0] : 0, argc > 1 ? a[1] : 0, argc > 2 ? a[2] : 0,
-                         argc > 3 ? a[3] : 0, r);
+                         argc > 3 ? a[3] : 0, r, g_get_monotonic_time() - st0);
         }
     }
-    if (st0) gles_us_call += g_get_monotonic_time() - st0;
+    if (st0 && gles_obj_stats > 0) gles_us_call += g_get_monotonic_time() - st0;
     {
         /*
          * -trace gles_obj_log: every 10 s of host time, the live counts of the
