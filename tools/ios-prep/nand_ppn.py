@@ -8,6 +8,11 @@ it read from the IOP on the nub. The numbers below are a consistent 8 GiB part, 
 channels (FMI0, FMI1) with one chip enable each, two CAUs per chip, 2048 blocks per CAU of 128 pages
 of 8 KiB (+32 bytes of meta, 16 per 4 KiB logical page), 64 SLC pages per block, 1536-byte boot pages.
 Row addresses are (cau << (block_bits + page_bits)) | (block << page_bits) | page.
+
+A store of another size (`geometry`) keeps the chips and scales the blocks per CAU: 16, 32 and 64 GiB are
+the sizes the iPhone 4S was sold in (8 GiB came in 2013), 2 and 4 GiB are for tests. The FTL exports a
+little under the raw size (1,953,125 4-KiB sectors, 8.0 GB, of the 8 GiB part) and the install boot gives
+the data volume what the system volume leaves.
 """
 import ctypes
 import json
@@ -33,6 +38,35 @@ PPN = {
     "chip_id": "983a9493765a",         # 6 bytes, as AppleIOPFMI prints them
     "ppn_spec_version": 0x10000,       # PPN 1.0
 }
+
+STORAGE_GIB = (2, 4, 8, 16, 32, 64)
+
+
+def parse_storage(text):
+    """'16G', '16GB', '16 GiB' or '16' -> 16 (GiB), one of STORAGE_GIB."""
+    t = str(text).strip().upper().replace(" ", "")
+    for suffix in ("GIB", "GB", "G"):
+        if t.endswith(suffix):
+            t = t[:-len(suffix)]
+            break
+    if not t.isdigit() or int(t) not in STORAGE_GIB:
+        raise ValueError(f"storage {text!r}: one of " + ", ".join(f"{n}G" for n in STORAGE_GIB))
+    return int(t)
+
+
+def geometry(gib=8):
+    """PPN with gib GiB of raw pages: blocks_per_cau scaled from 2048 at 8 GiB, block_bits to match."""
+    if gib not in STORAGE_GIB:
+        raise ValueError(f"{gib} GiB: one of {STORAGE_GIB}")
+    g = dict(PPN)
+    g["blocks_per_cau"] = PPN["blocks_per_cau"] * gib // 8
+    g["block_bits"] = g["blocks_per_cau"].bit_length() - 1
+    return g
+
+
+def raw_bytes(g=PPN):
+    return (g["channels"] * g["ce_per_channel"] * g["caus_per_ce"] * g["blocks_per_cau"] * g["pages_per_block"]
+            * g["page_bytes"])
 
 
 def dt_props(g=PPN):

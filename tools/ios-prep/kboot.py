@@ -26,7 +26,8 @@ ROOT_MATCHING = ("<dict><key>IOProviderClass</key><string>IOMedia</string><key>I
 TEST_IMEI = "004999010640000"   # GSMA's test range, as the A4 boards use
 
 # A4 raw-NAND geometry (16 GB, eight dies) the h2fmi model serves; only the keys the DT has are written.
-# The PPN geometry (--nand ppn, the N94's own kind of NAND) is nand_ppn.PPN.
+# The PPN geometry (--nand ppn, the N94's own kind of NAND) is nand_ppn.PPN, or a store's own geometry.json
+# passed as nand= (a dict): the kernel and the page store must agree on it.
 NAND_RAW = [
     ("#ce", 8), ("#die-ce", 1), ("#ce-blocks", 0x1000), ("#block-pages", 128), ("#page-bytes", 4096),
     ("#spare-bytes", 0x80), ("vendor-type", 0x10_0014), ("#databus", 2),
@@ -177,7 +178,7 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
     # seed would replace what the last boot saved, every boot, and lacks the 0x5a "nvram" header
     # IOFlashNVRAM validates. Without the property the kernel reads the image from the controller.
     n = dt.slot_len("chosen", "nvram-proxy-data")
-    if n and nand == "ppn":
+    if n and nand != "raw":
         dt.remove("chosen", "nvram-proxy-data")
     elif n:
         dt.set("chosen", "nvram-proxy-data", nvram_image(n))
@@ -231,7 +232,7 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
             for k, v in NAND_RAW:
                 dt.set_if(node, k, v)
         else:
-            for k, v in nand_ppn.dt_props():
+            for k, v in nand_ppn.dt_props(nand if isinstance(nand, dict) else nand_ppn.PPN):
                 dt.set_if(node, k, v)
     # memory layout
     dt.set("pram", "reg", [board.pram_pa, PRAM_SIZE])

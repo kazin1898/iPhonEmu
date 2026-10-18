@@ -14,6 +14,7 @@ The plists stay binary (launchd reads either). The IPSW's root has no free block
 HFS-compressed inline (no data blocks of their own), so the first edit empties a donor file the running
 system never reads (the software-update ramdisk, 20 MB) and the rewritten plists take blocks from it.
 """
+import copy
 import plistlib
 
 import hfs
@@ -29,34 +30,38 @@ def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disa
     sets StartInterval, launchd re-running the job every that many seconds. `disabled` True sets the
     plist's Disabled key, False removes it (the stock plists have none): a disabled job is not loaded and its Mach services are not
     registered, so a client's lookup fails at once instead of waiting on a daemon that never answers."""
-    out = {}
-    v = hfs.Volume(rootfs, writable=True)
-    try:
-        if v.free_blocks < 64 and donor:
-            v.truncate(donor)
-        for label in jobs:
-            path = JOBS % label
-            d = plistlib.loads(v.read_file(path))
-            if console:
-                dest = console if isinstance(console, str) else "/dev/console"
-                d["StandardOutPath"] = dest
-                d["StandardErrorPath"] = dest
-            for kv in env:
-                k, _, val = kv.partition("=")
-                d.setdefault("EnvironmentVariables", {})[k] = val
-            if program:
-                d.pop("Program", None)
-                d["ProgramArguments"] = list(program)
-            if interval:
-                d["StartInterval"] = int(interval)
-            if disabled:
-                d["Disabled"] = True
-            elif disabled is not None:
-                d.pop("Disabled", None)     # back to the stock job, which has no such key
-            v.set_file_data(path, plistlib.dumps(d, fmt=plistlib.FMT_BINARY))
-            out[label] = d
-    finally:
-        v.close()
+    out, stock = {}, show_jobs(rootfs, jobs)
+    for label in jobs:
+        d = copy.deepcopy(stock[label])
+        if console:
+            dest = console if isinstance(console, str) else "/dev/console"
+            d["StandardOutPath"] = dest
+            d["StandardErrorPath"] = dest
+        for kv in env:
+            k, _, val = kv.partition("=")
+            d.setdefault("EnvironmentVariables", {})[k] = val
+        if program:
+            d.pop("Program", None)
+            d["ProgramArguments"] = list(program)
+        if interval:
+            d["StartInterval"] = int(interval)
+        if disabled:
+            d["Disabled"] = True
+        elif disabled is not None:
+            d.pop("Disabled", None)     # back to the stock job, which has no such key
+        out[label] = d
+    # A job already as asked is left alone, and the image is opened for writing only when one is not:
+    # its blocks keep their place, and a QEMU serving the image read-only does not stand in the way.
+    todo = [label for label in jobs if out[label] != stock[label]]
+    if todo:
+        v = hfs.Volume(rootfs, writable=True)
+        try:
+            if v.free_blocks < 64 and donor:
+                v.truncate(donor)
+            for label in todo:
+                v.set_file_data(JOBS % label, plistlib.dumps(out[label], fmt=plistlib.FMT_BINARY))
+        finally:
+            v.close()
     return out
 
 
@@ -80,6 +85,30 @@ def asl_console(rootfs, donor=DONOR):
         v.close()
 
 
+# What every unit made from a 10B329 system volume needs (docs/n94/README.md "M3"): QuartzCore's software
+# renderer for backboardd and SpringBoard (no SGX model), and the Bluetooth jobs off (BlueTool's HCI
+# traffic on uart3 ends in AppleSimpleUARTSync's assertion, a kernel panic). (jobs, edit_jobs keywords).
+UNIT_EDITS = (
+    (("com.apple.backboardd", "com.apple.SpringBoard"), {"env": ("CA_ENABLE_OGL=0",)}),
+    (("com.apple.BTServer", "com.apple.BlueTool"), {"disabled": True}),
+)
+
+
+def unit_edits(rootfs, donor=DONOR):
+    """UNIT_EDITS on `rootfs`, idempotent (edit_jobs leaves a job already as asked alone); returns the
+    labels of the jobs this call changed. A job the build does not have is skipped."""
+    changed = []
+    for jobs, kw in UNIT_EDITS:
+        for label in jobs:
+            try:
+                before = show_jobs(rootfs, [label])[label]
+            except FileNotFoundError:
+                continue
+            if edit_jobs(rootfs, [label], console=False, donor=donor, **kw)[label] != before:
+                changed.append(label)
+    return changed
+
+
 LOCKDOWND = "/usr/libexec/lockdownd"
 
 
@@ -89,17 +118,22 @@ def activation_shortcut(rootfs, donor=DONOR):
     binary is stored uncompressed in place of its decmpfs copy; a second run finds it patched and leaves
     it. Returns the patcher's report."""
     import lockdownd_patch
-    v = hfs.Volume(rootfs, writable=True)
+    v = hfs.Volume(rootfs)
     try:
         old = v.read_file(LOCKDOWND)
-        new, report = lockdownd_patch.patch(old)
-        if new != old:
-            need = -(-len(new) // v.block_size)
-            if v.free_blocks < need + 64 and donor:
-                v.truncate(donor)
-            v.set_file_data(LOCKDOWND, new)
-            if v.read_file(LOCKDOWND) != new:
-                raise OSError(f"{rootfs}: {LOCKDOWND} reads back different from what was written")
+    finally:
+        v.close()
+    new, report = lockdownd_patch.patch(old)
+    if new == old:
+        return report
+    v = hfs.Volume(rootfs, writable=True)
+    try:
+        need = -(-len(new) // v.block_size)
+        if v.free_blocks < need + 64 and donor:
+            v.truncate(donor)
+        v.set_file_data(LOCKDOWND, new)
+        if v.read_file(LOCKDOWND) != new:
+            raise OSError(f"{rootfs}: {LOCKDOWND} reads back different from what was written")
         return report
     finally:
         v.close()

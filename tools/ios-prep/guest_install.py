@@ -141,6 +141,32 @@ def var_skeleton(rootfs):
         v.close()
 
 
+# lockdownd's data ark as a factory unit carries it (docs/n81/README.md "iOS 6", item 4): the activation
+# state cached as FactoryActivated and the brick state off. Keys are "<domain>-<key>", the empty domain
+# for BrickState. 6.x lockdownd stays stock and reads its state from here.
+DATA_ARK = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+\t<key>-BrickState</key>
+\t<false/>
+\t<key>com.apple.mobile.lockdown_cache-ActivationState</key>
+\t<string>FactoryActivated</string>
+</dict>
+</plist>
+"""
+
+
+def lockdown_seed(skeleton):
+    """The data ark entries for the skeleton: /private/var/root/Library/Lockdown/data_ark.plist (root,
+    0644) and its folder, the folders the IPSW does not have added parents first. The install boot makes
+    the file anew each time, so it also resets a data ark lockdownd had turned Unactivated."""
+    have = {p for k, p, *_ in skeleton if k == "d"}
+    out = [("d", d, 0o755, 0, 0, b"") for d in ("/root", "/root/Library", "/root/Library/Lockdown")
+           if d not in have]
+    return out + [("f", "/root/Library/Lockdown/data_ark.plist", 0o644, 0, 0, DATA_ARK)]
+
+
 def table_h(system_blocks, system_source=0, system_lba=SYSTEM_LBA, skeleton=()):
     """it_install_table.h: what the helper writes, for one system volume, and the /private/var skeleton
     (VAR_SKELETON entries {kind, mode, uid, gid, path, data, size})."""
@@ -454,7 +480,11 @@ def write_markers(store_dir, rootfs, extra_sources=()):
     size = os.path.getsize(rootfs)
     if size % BLOCK:
         raise SystemExit(f"{rootfs}: {size} bytes is not a whole number of 4 KiB blocks")
-    rel = os.path.relpath(os.path.abspath(rootfs), os.path.abspath(store_dir)).replace(os.sep, "/")
+    try:
+        rel = os.path.relpath(os.path.abspath(rootfs), os.path.abspath(store_dir))
+    except ValueError:      # another drive (Windows): the model takes an absolute path as it is
+        rel = os.path.abspath(rootfs)
+    rel = rel.replace(os.sep, "/")
     sources = [{"path": rel, "bytes": size, "what": "system volume (HFSX)"}] + list(extra_sources)
     path = os.path.join(store_dir, "markers.json")
     with open(path, "w") as f:

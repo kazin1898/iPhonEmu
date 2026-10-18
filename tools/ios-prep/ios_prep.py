@@ -308,6 +308,9 @@ def cmd_install(args):
     markers, blocks = guest_install.write_markers(args.nand, rootfs)
     log(f"markers: {markers} (source 0 = rootfs.hfs, {blocks} blocks of 4 KiB)")
     skeleton = guest_install.var_skeleton(rootfs)
+    if args.activation == "factory":
+        skeleton += guest_install.lockdown_seed(skeleton)
+        log("lockdownd's data ark: FactoryActivated, BrickState false (/private/var/root/Library/Lockdown)")
     helper, info = guest_install.build_helper(blocks, args.out, clang=args.clang, lld=args.lld, skeleton=skeleton)
     log(f"it_install: {helper}, {info['code_bytes']} bytes of code in a {info['macho_bytes']}-byte Mach-O, "
         f"table lba {info['system_lba']} + {blocks} blocks, /private/var skeleton {len(skeleton)} entries")
@@ -407,6 +410,9 @@ def main():
     p.add_argument("--keys")
     p.add_argument("--clang", help="clang to use (default: PATH, then the workspace MSYS2 UCRT64)")
     p.add_argument("--lld", help="ld.lld to use")
+    p.add_argument("--activation", choices=("factory", "none"), default="factory",
+                   help="seed lockdownd's data ark as a factory unit's (default), or leave lockdownd to make it "
+                   "(Unactivated: Setup stops at its activation page)")
     p.set_defaults(fn=cmd_install)
     p = sub.add_parser("inventory")
     p.add_argument("dir")
