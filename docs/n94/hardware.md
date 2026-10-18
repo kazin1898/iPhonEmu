@@ -449,10 +449,15 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
   words at `+0x2040/+0x2044/+0x2048` (0x00ff0202, 0x00ff0001, 0x00ff0003) and the video block's bases
   (`+0x3074..+0x30a0`, all 0) ride the same swaps. Formats: 0 BGRA, 2 ARGB4444, 3 ARGB1555 (`L555`),
   4 RGB565.
-- **Observed so far.** Three swaps on pipe0 (IDs 9, 17, 25) in the first minute of a normal boot, none later
-  in five minutes; the RGBOUT pipe gets a pair per `AppleRGBOUT` power cycle (12 in five minutes). The boot
-  framebuffer is zero (kboot draws no logo), so the panel is black until the system app's first frame, which
-  has not come: see the README's M3 section for the state of that.
+- **Base 0 is a live layer.** Behind the MMU the base register is 0 on every swap; the A4 scanout took a zero
+  base for an unset layer and kept the panel dark. The model now shows any MMU-on layer whatever its base.
+- **What backboardd draws.** Three swaps on pipe0 in the first 90 s of a normal boot (IDs 9, 17, 25; the
+  RGBOUT pipe gets a pair per `AppleRGBOUT` power cycle). 9 and 17 show UI0 alone, iBoot's framebuffer
+  (black: kboot draws no logo). 25 turns on both layers (`0x1038` = 0x300), UI0 and UI1 each through its
+  own MMU (page tables at 0x81cbc000 and 0x81d1e000 in one run), both BGRA 640x960 at stride 2560, blended
+  UI1 over UI0: backboardd's software CoreAnimation (`CA_ENABLE_OGL=0`) shows the Apple logo with an empty
+  progress bar, its boot overlay, and keeps it until the system app's first frame
+  (`runs/n94/progress/2026-10-17_M3_primeiro-frame-logo.png`).
 
 ## Open points for the machine model
 
@@ -487,3 +492,14 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
    keybagd running) the same day. Open: the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
+9. **Audio, the M3 gate** (README "M3 work"): mediaserverd's audio session never comes up, and backboardd and
+   SpringBoard wait on it. On the A5 every audio route goes through the AE2 coprocessor: `ae2,s5l8940x`
+   (`AppleA5AE2`: registers at 0x341E0000/0x341E1000/0x341A0000/0x341C1000, 192 KiB of SRAM at 0x34000000,
+   AIC 97 and 98, firmware `IOP_s5l8940xae2_firmware`, an EmbeddedIOP with role AE2 whose endpoints serve
+   `AppleSongbird` and `AppleAE2Audio`), the I2S switch (`AppleAE2MCA` on `i2s-switch,s5l8940x`, 0x3FA01000),
+   then `AppleCS42L63Audio` on i2c0 0x4A and the Samsung I2S blocks. The AE2 firmware is the audio DSP (its
+   own task kernel, an "audio command" opcode set, AAC codecs). Options: (a) a high-level AE2 in the shape
+   of `s5l8940_iop.c` (the same EmbeddedIOP rings and control endpoint) that answers AppleAE2Audio's audio
+   commands and advances the stream clocks, with the CS42L63 register file from the cs42l58 model: the kexts'
+   protocol has to be read first, the larger part; (b) running the AE2 firmware itself on a second ARM core
+   with its SRAM, MCA and DMA modeled: more hardware, no protocol to guess.
