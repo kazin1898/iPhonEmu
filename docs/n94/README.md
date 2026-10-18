@@ -438,8 +438,34 @@ list, not the home screen, so the home screen and the stock apps on the bridge w
 `2026-10-18_GL_setup-transicao-pagina.png`, the whole slide in one intermediate frame (3 changed frames in
 8 s of sampling), against ~20 on the phone. Counted by the display's frame-timeline instead, the bridge
 draws 16-20 frames of such a slide's 20-24 VBLs; the fast screendumps themselves halved the VBL and lost
-taps (`docs/windows-gl.md`, "A page transition, frame by frame"). Open: the home screen and apps on the
-bridge, and the second core.
+taps (`docs/windows-gl.md`, "A page transition, frame by frame"). Open: the apps on the bridge, and the
+second core.
+
+The home screen on the bridge, and two glitches the user saw there (2026-10-18, the `gl` unit walked through
+Setup again; panel frames dumped at every latch by a temporary hook in `front_latch`):
+
+- **Setup's Apple ID "Skip" flickered** while the spinner ran: every third frame was still dimmed by the
+  alert (`2026-10-18_GL_setup-skip-pisca.png`). CoreAnimation 6.x draws only the damage into each of the three
+  display surfaces it rotates, keeping per surface the damage since that surface was drawn (its
+  `IOMFBDisplay` buffer pool, watched with gdbstub breakpoints on `begin_update`/`finish_update_` once the
+  shared cache's slide was known). With no network Setup moves on at once and the alert's dimming layer is
+  removed 0.4 s into its fade (opacity 254 -> 200 of 255); the removal brings no damage, so the surfaces drawn
+  during the fade kept the dimmed picture outside every later damage. When the bridge's own logging slowed the
+  frames, the fade finished first and nothing flickered. Fixed in the bridge (`gles_copy_back`, bcf5cde36a):
+  each frame's display surface starts as a copy of the frame before it, which is what CA assumes is outside
+  its damage (`2026-10-18_GL_setup-skip-sem-pisca.png`).
+- **The Calendar icon** came out with 4 rows of random pixels under it (`2026-10-18_GL_home-calendario-faixa.png`)
+  on one boot, and on two others with only its day and date, no white page (`...-sem-fundo.png`). Not the
+  bridge: every surface import was compared row by row with the same rows read through the binding process's
+  MMU (identical), and the icon's memory was never written after the import. The icon is the one 118x124
+  surface not at a page's start + 0x20 (`0x...a80`): the image SpringBoard composes at run time, and what it
+  leaves there differs from boot to boot (rows 120-123 hold reused, never-written memory where the other icons
+  have the end of their shadow). Passing the size `texImageIOSurface:` is given (the GL engine's texture size)
+  instead of the surface's own changed nothing: CA asks for 118x124 for it. Open: why SpringBoard's Calendar
+  image is incomplete here (its drawing, or an accelerator path the N94 lacks: the scalers at 0x38300000 and
+  0x38400000 are not modeled, "Scaler HW version 0").
+- Setup's completion does not survive a reboot of these units (`gl` and `m4gl` start at "slide to set up"
+  again after a QMP `quit`), so every home-screen check means walking Setup and its Terms again.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 
