@@ -43,6 +43,28 @@
 #define S5L8940_IOP_BASE         0x3f300000   /* iop,s5l8940x: the AP-side control block (AppleA5IOP) */
 #define S5L8940_IOP_SIZE         0x1000
 
+/*
+ * Display: the A4 blocks at the A5 addresses (hw/arm/s5l8930_display.c for the
+ * pipes, CLCD, RGBOUT and TV-out; hw/arm/ipod_touch_mipi_dsi.c for the DSIM).
+ * DT clcd reg[0..2], rgbout reg[0..1], tv-out, mipi-dsim reg[0] (reg[1],
+ * 0x3f110000, is the "sac" the kernel never reaches for), dart-nrt, dart-rt.
+ */
+#define S5L8940_DISP_PIPE0_BASE  0x3a100000   /* AppleH4PDisplayPipe, 0x7000 */
+#define S5L8940_CLCD_BASE        0x39200000   /* AppleH4PCLCD's timing generator, 0x2000 */
+#define S5L8940_CLCD_AUX_BASE    0x39300000   /* clcd reg[2], 0x1000: new on the A5 */
+#define S5L8940_RGBOUT_BASE      0x3a200000   /* AppleH4PRGBOUT's own DisplayPipe */
+#define S5L8940_RGBOUT2_BASE     0x39600000   /* its control block */
+#define S5L8940_TVOUT_BASE       0x39400000
+#define S5L8940_DSIM_BASE        0x39500000   /* mipi-dsim-1,samsung */
+#define S5L8940_DART_NRT_BASE    0x38b00000   /* dart-nrt: mapper-jpeg, mapper-scaler */
+#define S5L8940_DART_RT_BASE     0x3a400000   /* dart-rt: mapper-isp */
+#define S5L8940_IRQ_TVOUT        40
+#define S5L8940_IRQ_DSIM         41
+#define S5L8940_IRQ_CLCD         42           /* DT clcd interrupts[1] */
+#define S5L8940_IRQ_DISP_PIPE0   43           /* DT clcd interrupts[0]: the pipe's frame interrupt */
+#define S5L8940_IRQ_RGBOUT_PIPE  44           /* DT rgbout interrupts[0] */
+#define S5L8940_IRQ_RGBOUT       45
+
 /* AIC vector numbers (DT interrupts) */
 #define S5L8940_IRQ_WDT          4
 #define S5L8940_IRQ_UART(n)      (21 + (n))

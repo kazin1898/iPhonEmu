@@ -35,6 +35,7 @@
 #include "hw/i2c/i2c.h"
 #include "hw/arm/ipod_touch_usb_otg.h"
 #include "hw/arm/ipod_touch_usb_phys.h"
+#include "hw/arm/ipod_touch_mipi_dsi.h"
 #include "hw/usb/hcd-ehci.h"
 #include "hw/usb/hcd-ohci.h"
 #include "system/reset.h"
@@ -52,6 +53,7 @@ struct N94MachineState {
     DeviceState *aic;
     DeviceState *pmgr;
     DeviceState *gpio;
+    DeviceState *display;                /* the display pipe, CLCD, RGBOUT, TV-out (hw/arm/s5l8930_display.c) */
     synopsys_usb_state *usb_otg;
     char *kboot_path;
     char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
@@ -131,6 +133,37 @@ static void n94_cpu_reset(void *opaque)
     /* cpu_reset leaves us in SVC mode, IRQ/FIQ masked, MMU and caches off. */
     s->cpu->env.regs[0] = bootargs_pa;
     cpu_set_pc(cs, entry_pa);
+}
+
+/*
+ * The framebuffer iBoot would have left lit, from the bundle's boot_args
+ * (Video: base, display, rowbytes, width, height, depth at +20): the display
+ * model scans it out from reset, so AppleH4PCLCD finds the pipe programmed.
+ * tools/ios-prep puts it at the top of DRAM under pram (0x9f700000, 640x960).
+ */
+static bool n94_kboot_video(const char *path, uint32_t *base, uint32_t *width, uint32_t *height)
+{
+    g_autofree char *data = NULL;
+    gsize size;
+    const uint8_t *trailer, *args;
+    uint32_t load_pa, bootargs_pa, image_len;
+
+    if (!g_file_get_contents(path, &data, &size, NULL) || size < KBOOT_TRAILER_LEN ||
+        memcmp(data + size - KBOOT_TRAILER_LEN, KBOOT_MAGIC, 8) != 0) {
+        return false;
+    }
+    trailer = (const uint8_t *)data + size - KBOOT_TRAILER_LEN;
+    load_pa = ldl_le_p(trailer + 8);
+    bootargs_pa = ldl_le_p(trailer + 16);
+    image_len = ldl_le_p(trailer + 20);
+    if (bootargs_pa < load_pa || bootargs_pa - load_pa + 44 > image_len) {
+        return false;
+    }
+    args = (const uint8_t *)data + (bootargs_pa - load_pa);
+    *base = ldl_le_p(args + 20);
+    *width = ldl_le_p(args + 32);
+    *height = ldl_le_p(args + 36);
+    return *base != 0 && *width != 0 && *height != 0;
 }
 
 static void n94_init(MachineState *machine)
@@ -338,6 +371,60 @@ static void n94_init(MachineState *machine)
             sysbus_mmio_map(sbd, 0, i ? S5L8940_USB_OHCI1_BASE : S5L8940_USB_OHCI0_BASE);
             sysbus_connect_irq(sbd, 0, n94_irq(s, i ? S5L8940_IRQ_USB_OHCI1 : S5L8940_IRQ_USB_OHCI0));
         }
+    }
+
+    /*
+     * The panel: the A4 display model (DisplayPipe0, CLCD, RGBOUT and its
+     * control block, TV-out) at the A5's addresses, the same register offsets
+     * (AppleH4PDisplayPipe/AppleH4PCLCD are the A5 builds of the A4 drivers),
+     * scanning out to the QEMU console. Its reset leaves the block as iBoot
+     * hands it over, UI0 live on boot_args' framebuffer and the CLCD's timing
+     * generator running: the 6.x AppleCLCD::start_hardware adopts only that
+     * ("CLCD not initied by iBoot, driver will not load" otherwise) and
+     * without it IOMobileFramebuffer has no main display for backboardd.
+     * The clcd node has no iommu-parent (fMapper 0), so the pipe's layer bases
+     * are physical addresses and the model's dart2 is left unmapped.
+     */
+    {
+        uint32_t fb_base = 0x9f700000, fb_w = 640, fb_h = 960;
+
+        if (!n94_kboot_video(s->kboot_path, &fb_base, &fb_w, &fb_h)) {
+            warn_report("n94: no Video in the kboot bundle's boot_args, assuming 640x960 at 0x9f700000");
+        }
+        dev = qdev_new(TYPE_S5L8930_DISPLAY);
+        s->display = dev;
+        qdev_prop_set_uint64(dev, "fb-base", fb_base);
+        qdev_prop_set_uint16(dev, "width", fb_w);
+        qdev_prop_set_uint16(dev, "height", fb_h);
+        qdev_prop_set_uint8(dev, "generation", 4);      /* AppleH4PDisplayPipe's window layout and layer MMU */
+        sbd = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, S5L8940_DISP_PIPE0_BASE);
+        sysbus_mmio_map(sbd, 1, S5L8940_CLCD_BASE);
+        sysbus_mmio_map(sbd, 3, S5L8940_RGBOUT_BASE);
+        sysbus_mmio_map(sbd, 4, S5L8940_TVOUT_BASE);
+        sysbus_mmio_map(sbd, 5, S5L8940_RGBOUT2_BASE);
+        sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_DISP_PIPE0));
+        sysbus_connect_irq(sbd, 1, n94_irq(s, S5L8940_IRQ_CLCD));
+        sysbus_connect_irq(sbd, 2, n94_irq(s, S5L8940_IRQ_RGBOUT_PIPE));
+
+        /*
+         * MIPI-DSIM, the Samsung IP the A4 boards share with the iPod, with the
+         * link as iBoot's pinot_init leaves it (HS clock running). The panel
+         * ID ApplePinotLCD wants is the DT's lcd-panel-id (tools/ios-prep
+         * writes it); the kernel never reads it over the link.
+         */
+        dev = qdev_new(TYPE_IPOD_TOUCH_MIPI_DSI);
+        IPOD_TOUCH_MIPI_DSI(dev)->hs_clock_at_reset = true;
+        qdev_prop_set_uint32(dev, "lanes", 4);            /* DT #lanes */
+        sbd = SYS_BUS_DEVICE(dev);
+        sysbus_realize_and_unref(sbd, &error_fatal);
+        sysbus_mmio_map(sbd, 0, S5L8940_DSIM_BASE);
+        sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_DSIM));
+
+        /* The two DARTs AppleS5L8930XDART programs at boot (jpeg/scaler, isp). */
+        sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_NRT_BASE, NULL);
+        sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_RT_BASE, NULL);
     }
 
     /*
