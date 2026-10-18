@@ -153,8 +153,49 @@ the main loop) during the same taps: the VBL went from 60 Hz to ~30 Hz with gaps
 lost, and the slides came out with 0-7 frames (0-1,236 GL calls in the 3 s traced, against 4,000-9,000
 undisturbed). Count frames with the `frame-timeline`, never with screendumps. What would add frames is the
 writeback's 2.2 ms, read back asynchronously (a pixel-pack buffer and a fence: the context is ES 3.0 on
-ANGLE), which would keep the spans under a VBL; the first frame and the ~11 ms a frame takes the guest are the
-TCG core's speed.
+ANGLE), which would keep the spans under a VBL (done: the next section); the first frame and the ~11 ms a
+frame takes the guest are the TCG core's speed.
+
+## The writeback, read back asynchronously (2026-10-18)
+
+Where the 2.2-2.9 ms of the synchronous writeback went, timed inside it over 60-frame windows on Setup's
+welcome page: binding the scratch framebuffer 5 us, `glReadPixels` 1.9-2.9 ms, the copy into the surface's
+guest pages and their dirty marking 0.26-0.29 ms. With a `glFinish` in front, the finish took 0.3-1.0 ms (the
+GPU still drawing the frame) and `glReadPixels` still 1.57 ms with the GPU idle: ANGLE's D3D11 staging copy
+and map, not a format conversion (the texture is BGRA, and reading it as RGBA cost the same 2.05 ms).
+`glReadPixels` into a pixel-pack buffer only queues the GPU copy; mapping the buffer at once cost 1.0-1.7 ms.
+
+So the frame-end writeback of a **scanout** surface now reads into a pack buffer and maps it at the display's
+next VBL (`gles_host_writeback_sync`, called by `vbl_tick` before anything is latched, so a partial or stale
+frame is still never scanned out; the GL contexts are current on the vCPU thread, so it runs there through
+`run_on_cpu`). By then the GPU is done and the vCPU usually idles in `wfi`. A scanout surface is one whose
+first page the display latched a swapped layer from (`gles_host_note_scanout` in `front_latch`: CA's three
+display surfaces); every other surface is still written back at once, since the guest CPU may read it right
+after its `glFinish` (an app snapshot). The frame lands earlier when the bridge reads that memory again (a
+bind or a sampled alias of the same base) or the next frame ends. CA follows each `glBindFramebuffer(0)` with
+a `glFinish`; on ANGLE that is now a host `glFlush`, since every path to guest memory waits for the GPU itself
+(a first build that still landed the frame there saved only 1 ms a frame). `-trace gles_call_log` prints a
+`[gles-wb] T landed tex N host US` line where each frame lands; `IT_GLES_WB_SYNC=1` restores the synchronous
+writeback.
+
+The same slides as above, same unit (`m4gl`), SDL window in front, counted with the `frame-timeline` and
+`gles_call_log` (`transition.py`); before = the synchronous build, 3 runs each, after = 4 runs each:
+
+| | before | after |
+|---|---|---|
+| Setup push (language -> country): frames / VBLs of the slide | 16-18 / 22 | 17-19 / 22-23 |
+| Setup Back (country -> language): frames / VBLs of the slide | 19-20 / 20-24 | 20-21 / 20-21 |
+| host ms per slide frame (median per run) | 3.7-4.1 | 1.5-1.8 |
+| the `glBindFramebuffer(0)` that ends the frame: p10 / median / p90 | 2.2 / 2.4 / 2.8 | 0.03 / 0.04 / 0.04 |
+| the frame landing at the VBL, outside its span: p10 / median / p90 | - | 0.42 / 0.53 / 0.70 |
+| guest span of a slide frame (> 50 draws): median / p90 / max | 11.1-14.5 / 15.7 / 18.3 ms | 8.3-8.5 / 9.0-13.6 / 15.3 ms |
+| slide frames spanning more than a VBL | 2 of 70 | 0 of 102 |
+
+Back now draws a new frame on (nearly) every VBL of its slide. The push still misses 4-5: its first frame,
+which spans 3-4 VBLs while the guest builds the new page's layers, is the guest's own. The latched frames of a
+push and a Back, dumped and compared (each one's horizontal shift against the previous), move in the slide's
+direction throughout (a stale frame would jump back by a whole step, 20-60 px; the only reverse shift was
+2 px as the Back settled), and no frame was repeated. Settings -> Safari was not measured again.
 
 ## Limitations
 
