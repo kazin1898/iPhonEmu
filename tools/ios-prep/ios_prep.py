@@ -290,9 +290,10 @@ def cmd_install(args):
     os.makedirs(args.out, exist_ok=True)
     markers, blocks = guest_install.write_markers(args.nand, rootfs)
     log(f"markers: {markers} (source 0 = rootfs.hfs, {blocks} blocks of 4 KiB)")
-    helper, info = guest_install.build_helper(blocks, args.out, clang=args.clang, lld=args.lld)
+    skeleton = guest_install.var_skeleton(rootfs)
+    helper, info = guest_install.build_helper(blocks, args.out, clang=args.clang, lld=args.lld, skeleton=skeleton)
     log(f"it_install: {helper}, {info['code_bytes']} bytes of code in a {info['macho_bytes']}-byte Mach-O, "
-        f"table lba {info['system_lba']} + {blocks} blocks")
+        f"table lba {info['system_lba']} + {blocks} blocks, /private/var skeleton {len(skeleton)} entries")
     keybag, kinfo = guest_install.build_keybag_helper(args.out, clang=args.clang, lld=args.lld)
     log(f"it_keybag: {keybag}, {kinfo['code_bytes']} bytes of code in a {kinfo['macho_bytes']}-byte dyld-linked "
         f"Mach-O, binds {', '.join(kinfo['binds'])} from {kinfo['dylib']}")

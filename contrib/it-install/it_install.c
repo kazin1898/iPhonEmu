@@ -30,10 +30,12 @@
  *      only if step 5 failed, keybagd (without the system keybag its kb_load fails and it reboots
  *      the device into recovery 20 s after launchd). The system volume stays as Apple shipped it;
  *      the knobs live on the emulator's data volume;
- *   7. syncs and halts.
+ *   7. turns the data volume's content protection on (kHFSContentProtectionBit; off while it writes, so
+ *      its files stay plaintext), syncs and halts.
  *
- * Every step is idempotent: a second run finds the MBR ("already installed") and only repairs a
- * data partition with no volume. Progress goes to the console as "it_install: ..." lines; the end is
+ * Every step is idempotent: a second run finds the MBR ("already installed"), writes the markers again
+ * (the FTL's garbage collection detaches the pages it moves) and makes a missing data volume.
+ * Progress goes to the console as "it_install: ..." lines; the end is
  * "it_install: done" (or "it_install: FAIL <why>", after which it parks so the log can be read).
  *
  * Built by tools/ios-prep/guest_install.py with the MSYS2 clang (bare-metal armv7 ELF object, lld,
@@ -56,6 +58,7 @@
 #define SYS_open 5
 #define SYS_close 6
 #define SYS_wait4 7
+#define SYS_unlink 10
 #define SYS_chown 16
 #define SYS_sync 36
 #define SYS_ioctl 54
@@ -329,17 +332,50 @@ static int run(int con, const char *path, const char *const argv[])
 }
 
 /* Does the data partition hold an HFS+ volume (the signature at byte 1024 of the partition)? */
+/* The data partition: 0 no volume, 1 one with kHFSContentProtectionBit (bit 30 of the header's
+ * attributes), 2 one without. */
 static int data_has_volume(uint8_t *buf)
 {
     int fd = wait_open(DATA_DEV, O_RDONLY, 120);
-    int yes;
+    int st = 0;
 
     if (fd < 0) {
         return -1;
     }
-    yes = xfer(0, fd, buf, BLOCK, 0) == BLOCK && buf[1024] == 'H' && (buf[1025] == '+' || buf[1025] == 'X');
+    if (xfer(0, fd, buf, BLOCK, 0) == BLOCK && buf[1024] == 'H' && (buf[1025] == '+' || buf[1025] == 'X')) {
+        st = (buf[1024 + 4] & 0x40) ? 1 : 2;
+    }
     sys(SYS_close, fd, 0, 0, 0);
-    return yes;
+    return st;
+}
+
+/*
+ * kHFSContentProtectionBit on or off in the data volume's header, the volume unmounted (the kernel goes
+ * by the primary header; the alternate one is left as it is). The install works with it off: on a
+ * protected volume what the helper writes is encrypted under the install boot's keys and unreadable on
+ * the next boot (launchd ignored the overrides and ran BTServer). On again afterwards: files without a
+ * cprotect attribute stay plaintext, and what the daemons create from then on gets its class. 0 on
+ * success.
+ */
+static int data_protect(uint8_t *buf, int on)
+{
+    int fd = (int)sys(SYS_open, (long)DATA_DEV, O_RDWR, 0, 0);
+    int st = 0;
+
+    if (fd < 0) {
+        return -1;
+    }
+    if (xfer(0, fd, buf, BLOCK, 0) != BLOCK || buf[1024] != 'H') {
+        st = -2;
+    } else {
+        buf[1024 + 4] = on ? (buf[1024 + 4] | 0x40) : (buf[1024 + 4] & ~0x40);
+        if (xfer(1, fd, buf, BLOCK, 0) != BLOCK) {
+            st = -3;
+        }
+        sys(SYS_fsync, fd, 0, 0, 0);
+    }
+    sys(SYS_close, fd, 0, 0, 0);
+    return st;
 }
 
 static void mkdir_as(const char *path, int mode, int uid)
@@ -353,6 +389,67 @@ static void mkdir_as(const char *path, int mode, int uid)
 
 #define O_CREAT 0x200
 #define O_TRUNC 0x400
+#define SYS_symlink 57
+#define SYS_lchown 364
+
+/*
+ * The system volume's /private/var as a restore lays it on the data volume (VAR_SKELETON, generated
+ * from the IPSW's rootfs by guest_install.py): folders, the small files and the symlink, each with the
+ * IPSW's mode and owner. Applied after the helper's own list, so its modes and owners win.
+ */
+struct var_entry {
+    char kind;                         /* 'd' folder, 'f' file, 'l' symlink */
+    int mode, uid, gid;
+    const char *path, *data;           /* data: a file's bytes, a symlink's target */
+    uint32_t size;
+};
+
+static int var_skeleton(void)
+{
+    static const struct var_entry var[] = { VAR_SKELETON { 0, 0, 0, 0, 0, 0, 0 } };
+    char path[160];
+    uint32_t i, j, k;
+    int n = 0, fd;
+
+    for (i = 0; var[i].kind; i++) {
+        const struct var_entry *e = &var[i];
+
+        for (j = 0; DATA_MNT[j]; j++) {
+            path[j] = DATA_MNT[j];
+        }
+        for (k = 0; e->path[k] && j + 1 < sizeof(path); k++) {
+            path[j++] = e->path[k];
+        }
+        path[j] = 0;
+        if (e->kind == 'd') {
+            sys(SYS_mkdir, (long)path, e->mode, 0, 0);
+        } else if (e->kind == 'l') {
+            char target[160];
+
+            for (k = 0; k < e->size && k + 1 < sizeof(target); k++) {
+                target[k] = e->data[k];
+            }
+            target[k] = 0;
+            sys(SYS_symlink, (long)target, (long)path, 0, 0);
+            sys(SYS_lchown, (long)path, e->uid, e->gid, 0);
+            n++;
+            continue;
+        } else {
+            sys(SYS_unlink, (long)path, 0, 0, 0);         /* made anew, as write_overrides does */
+            fd = (int)sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, e->mode, 0);
+            if (fd >= 0) {
+                if (e->size) {
+                    sys(SYS_write, fd, (long)e->data, e->size, 0);
+                }
+                sys(SYS_close, fd, 0, 0, 0);
+            }
+        }
+        sys(SYS_chmod, (long)path, e->mode, 0, 0);
+        sys(SYS_chown, (long)path, e->uid, e->gid, 0);
+        n++;
+    }
+    return n;
+}
 
 /*
  * launchd's overrides (what `launchctl unload -w` writes): BTServer and BlueTool off as the fork keeps
@@ -372,8 +469,12 @@ static const char overrides_tail[] = "</dict>\n</plist>\n";
 
 static int write_overrides(const char *path, int keybagd_off)
 {
-    long fd = sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
-    long n = 0;
+    long fd, n = 0;
+
+    /* Made anew, not truncated: a file written while the volume was protected keeps its cprotect
+     * attribute (and its class) through a truncate, and launchd could not read it. */
+    sys(SYS_unlink, (long)path, 0, 0, 0);
+    fd = sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, 0644, 0);
 
     if (fd < 0) {
         return -1;
@@ -441,6 +542,7 @@ static void populate_data(int con)
         mkdir_as(path, mode, uid);
     }
     mkdir_as(DATA_MNT "/tmp", 01777, 0);
+    say_num(con, "it_install: /private/var skeleton from the system volume, entries ", (uint32_t)var_skeleton());
     /* The data-protection step, with the data volume mounted: the effaceable format needs the trusted
      * root this ramdisk is, and the keybag goes to DATA_MNT/keybags. Its stdout/stderr reach the console
      * (dyld's own complaints included). */
@@ -457,12 +559,15 @@ static void populate_data(int con)
 __attribute__((section(".text.start"), noreturn)) void _start(void)
 {
     /* Journaled (-J): the emulator is quit without a guest shutdown, and the journal is what keeps the
-     * volume mountable after that (an unjournaled one went past fsck's repair once). */
+     * volume mountable after that (an unjournaled one went past fsck's repair once). Not -P (which this
+     * newfs_hfs takes): made with it, the volume was protected during the install, and what this helper
+     * wrote there (the keybag, launchd's overrides) was unreadable on the next boot. The bit goes on
+     * once the install's files are in (data_protect). */
     static const char *const newfs[] = { "newfs_hfs", "-s", "-J", "-v", "Data", DATA_DEV, 0 };
     uint8_t buf[CHUNK * BLOCK] __attribute__((aligned(16)));
     uint64_t blocks = 0;
     uint32_t bsize = 0, i, n, chunk;
-    int disk, st, con, has;
+    int disk, st, con, has, installed;
 
     con = wait_open("/dev/console", O_WRONLY, 20);
     say(con, "it_install: hello (" MARKER_MAGIC ")\n");
@@ -517,12 +622,16 @@ __attribute__((section(".text.start"), noreturn)) void _start(void)
         park(con, "disk geometry");
     }
 
-    /* Already installed (an MBR with our system partition)? Then only the data volume is checked. */
-    if (xfer(0, disk, buf, BLOCK, 0) == BLOCK && buf[510] == 0x55 && buf[511] == 0xaa &&
-        buf[446 + 4] == 0xaf) {
-        say(con, "it_install: already installed\n");
-        sys(SYS_close, disk, 0, 0, 0);
-        goto data;
+    /*
+     * Already installed (an MBR with our system partition)? The markers are written again all the
+     * same: the FTL's garbage collection copies a marker page as the bytes it was served, so a page it
+     * moved stops following the host file, and edits to the system volume image (tools/ios-prep
+     * sysvol) then never reach the guest. A new set of markers makes the whole volume the host's again.
+     */
+    installed = xfer(0, disk, buf, BLOCK, 0) == BLOCK && buf[510] == 0x55 && buf[511] == 0xaa &&
+                buf[446 + 4] == 0xaf;
+    if (installed) {
+        say(con, "it_install: already installed, refreshing the markers\n");
     }
 
     /* How much the block device takes per write: the largest power of two up to CHUNK that works. */
@@ -558,23 +667,34 @@ __attribute__((section(".text.start"), noreturn)) void _start(void)
     say(con, "it_install: markers written\n");
 
     /* The MBR last, so a half-done install is not taken for a finished one. */
-    memset(buf, 0, BLOCK);
-    mbr(buf, blocks);
-    if (xfer(1, disk, buf, BLOCK, 0) != BLOCK) {
-        park(con, "MBR write");
+    if (!installed) {
+        memset(buf, 0, BLOCK);
+        mbr(buf, blocks);
+        if (xfer(1, disk, buf, BLOCK, 0) != BLOCK) {
+            park(con, "MBR write");
+        }
     }
     sys(SYS_fsync, disk, 0, 0, 0);
     sys(SYS_ioctl, disk, DKIOCSYNCHRONIZECACHE, 0, 0);
     sys(SYS_close, disk, 0, 0, 0);      /* closing the whole disk after a write re-probes its partitions */
-    say(con, "it_install: MBR written\n");
+    if (!installed) {
+        say(con, "it_install: MBR written\n");
+    }
 
-data:
     has = data_has_volume(buf);
     if (has < 0) {
         park(con, "no " DATA_DEV);
     }
+#ifdef IT_FRESH_DATA
+    /* Build knob (IT_INSTALL_CFLAGS=-DIT_FRESH_DATA): the data volume is made anew whatever it holds. */
+    say(con, "it_install: IT_FRESH_DATA build, the data volume is made anew\n");
+    has = 0;
+#endif
     if (has) {
         say(con, "it_install: data volume present\n");
+        if (has == 1) {
+            say_num(con, "it_install: content protection off for the install -> ", (uint32_t)data_protect(buf, 0));
+        }
     } else {
         say(con, "it_install: newfs_hfs Data\n");
         st = run(con, "/sbin/newfs_hfs", newfs);
@@ -583,6 +703,7 @@ data:
         }
     }
     populate_data(con);
+    say_num(con, "it_install: content protection on -> ", (uint32_t)data_protect(buf, 1));
     sys(SYS_sync, 0, 0, 0, 0);
     msleep(1000);
     say(con, "it_install: done\n");
