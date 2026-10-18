@@ -47,11 +47,36 @@ static void os_undo_timer_resolution(void)
     timeEndPeriod(mm_tc.wPeriodMin);
 }
 
+/*
+ * Windows 11 stops honoring timeBeginPeriod for a process whose windows are all
+ * minimized or covered: its timer waits fall back to the 15.6 ms system tick.
+ * Measured with a probe on 11 22631, Sleep(1) went from 1.8 ms to 15.7 ms a few
+ * seconds after its window was minimized; for QEMU every guest timer then fires
+ * late, and the A5 display's 60 Hz VBL came every 31 ms (docs/windows-gl.md).
+ * PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION in the control mask with the
+ * state bit clear keeps the requested resolution. Defined here: the SDK guards
+ * the declarations behind _WIN32_WINNT >= Windows 10, newer than QEMU builds for.
+ * Older Windows has no such class and the call fails harmlessly.
+ */
+static void os_keep_timer_resolution(void)
+{
+    struct {
+        ULONG Version, ControlMask, StateMask;
+    } state = { 1, 0x4 /* IGNORE_TIMER_RESOLUTION */, 0 };
+    BOOL (WINAPI *set_info)(HANDLE, int, LPVOID, DWORD) =
+        (void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessInformation");
+
+    if (set_info) {
+        set_info(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &state, sizeof(state));
+    }
+}
+
 void os_setup_early_signal_handling(void)
 {
     SetConsoleCtrlHandler(qemu_ctrl_handler, TRUE);
     timeGetDevCaps(&mm_tc, sizeof(mm_tc));
     timeBeginPeriod(mm_tc.wPeriodMin);
+    os_keep_timer_resolution();
     atexit(os_undo_timer_resolution);
 }
 

@@ -119,6 +119,7 @@ struct S5L8930DisplayState {
     qemu_irq clcd_irq;
     QemuConsole *con;
     QEMUTimer *vbl;
+    int64_t next_vbl;        /* the VBL grid (virtual ns): vbl_arm */
     uint64_t fb_base;        /* property: seed iBoot's scanout when nonzero */
     uint16_t width, height;  /* properties: the board's panel, as iBoot programs it */
     uint32_t pw, ph;         /* "panel-width"/"panel-height": panel= override (issue #21), 0 = the board's */
@@ -318,6 +319,25 @@ static void front_latch(S5L8930DisplayState *s);
 static void clcd_update_irq(S5L8930DisplayState *s);
 
 /*
+ * The next VBL, on a fixed grid. Re-arming at "now + period" added each tick's wake-up latency to
+ * the period: 17.4 ms (57 Hz) at the 1 ms host timer, and 31.2 ms (32 Hz) when Windows 11 put
+ * QEMU's process on the 15.6 ms system tick (its window minimized or covered), which halved
+ * CoreAnimation's ceiling. On a grid a late tick is followed by an early one; more than a whole
+ * period behind (a stopped VM, a descheduled host), the grid restarts from now rather than
+ * handing the guest a burst of VBLs, as ipod_touch_lcd's refresh_timer_tick does.
+ */
+static void vbl_arm(S5L8930DisplayState *s, bool restart)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    s->next_vbl += VBL_PERIOD_NS(s);
+    if (restart || s->next_vbl <= now) {
+        s->next_vbl = now + VBL_PERIOD_NS(s);
+    }
+    timer_mod(s->vbl, s->next_vbl);
+}
+
+/*
  * The frame end on one pipe: its queued swap completes (swap ID to 0x1048) and
  * VBL + swap-done latch in its status. Both pipes are the same DisplayPipe IP.
  * RGBOUT's matters at teardown: 4.3's QuartzCore swaps the H3RGBOutDisplay
@@ -388,7 +408,7 @@ static void vbl_tick(void *opaque)
                 s->pipe[i].regs[DP_IRQ_STATUS / 4] |= DP_IRQ_VBL;
                 pipe_update_irq(&s->pipe[i]);
             }
-            timer_mod(s->vbl, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + VBL_PERIOD_NS(s));
+            vbl_arm(s, false);
             return;
         }
     }
@@ -432,7 +452,7 @@ static void vbl_tick(void *opaque)
     /* ponytail: the frame is the only CLCD source raised, the one AppleCLCD enables (its LUT and dither updates). */
     s->clcd_status |= CLCD_IRQ_FRAME;
     clcd_update_irq(s);
-    timer_mod(s->vbl, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + VBL_PERIOD_NS(s));
+    vbl_arm(s, false);
 }
 
 /* ---- CLCD timing generator ---------------------------------------------- */
@@ -1107,7 +1127,7 @@ static void s5l8930_display_reset(DeviceState *dev)
         }
     }
     pipes_update_irq(s);
-    timer_mod(s->vbl, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + VBL_PERIOD_NS(s));
+    vbl_arm(s, true);
 }
 
 static void s5l8930_display_realize(DeviceState *dev, Error **errp)
