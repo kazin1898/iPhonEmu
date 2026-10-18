@@ -462,6 +462,7 @@ static void nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
         return;
     }
     s->markers_served++;
+    TRACE_PRINTF(trace_s5l8940_iop_log, "marker source %u block %u served\n", source, block);
 }
 
 /*
