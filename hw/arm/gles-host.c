@@ -348,6 +348,8 @@ typedef struct {
 #endif
     GLuint fbo, tex, depth, sync_fbo;   /* sync_fbo: gles_surface_writeback's scratch */
     GLuint copy_fbo;                    /* gles_surface_copy's draw side */
+    GLuint frame_tex;                   /* the surface texture written back at the last frame end */
+    bool frame_pending;                 /* no display surface bound since (gles_copy_back) */
     GLuint wb_pbo;                      /* the frame-end writeback's pack buffer (gles_wb) */
     size_t wb_pbo_size;
     uint32_t drawable_width, drawable_height;
@@ -4909,6 +4911,10 @@ static int gles_surface_flush(CPUState *cpu, uint32_t base, bool async)
                     (s->format == GLES_SURFACE_RGB565 || s->format == GLES_SURFACE_RGB555 ? 2 : 4);
             }
             if (r) return -1;
+            if (!base) {                        /* a frame end: the next frame starts from this one */
+                gh.frame_tex = GPOINTER_TO_UINT(key);
+                gh.frame_pending = true;
+            }
         }
     }
     return 0;
@@ -4971,6 +4977,75 @@ static bool gles_refresh_surfaces_1(CPUState *cpu)
     }
     glActiveTexture(active);
     return ok;
+}
+
+/*
+ * A frame's first display surface starts as the frame before it.
+ *
+ * 6.x's CoreAnimation renders only the damage into each of the display surfaces it
+ * rotates (three on the N94): it keeps per surface the damage of every frame since that
+ * surface was last drawn, and counts on the rest of the surface already being the screen.
+ * That holds as long as every change on screen was damage. One is not: a layer taken out
+ * of the tree while an opacity animation on it is still running is removed without
+ * damage, as if it had already reached its (transparent) end value. Setup's Apple ID
+ * "Skip" does that to the alert's dimming layer: with no network, Setup moves on 0.4 s
+ * into a fade that runs much longer (measured: opacity 254 -> 200 of 255 at removal), so
+ * the surfaces drawn during the fade keep a dimmed picture outside the later damage, and
+ * the panel flickered between it and the bright one on every frame from one of them.
+ * (The phone hits the same window only if the network answers that fast.)
+ *
+ * So the bridge does what the invariant asks: at the first bind of a surface of the size
+ * and format of the one that ended the last frame, the last frame is copied into it on
+ * the host GPU before CoreAnimation draws. Outside the damage the copy is what CA
+ * believes is there; inside, CA redraws from its bottom layer up. One 640x960 blit a frame.
+ */
+static void gles_copy_back(void)
+{
+#ifdef GLES_HOST_ANGLE
+    GLint kind = 0, name = 0, read_fb = 0, draw_fb = 0;
+    GLboolean scissor, mask[4];
+    GLESSurface *s, *last;
+
+    if (!gh.frame_pending || !gh.surfaces || !angle_es2) return;
+    glGetFramebufferAttachmentParameterivEXT(GL_FRAMEBUFFER_EXT,
+        GL_COLOR_ATTACHMENT0_EXT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE_EXT, &kind);
+    if (kind != GL_TEXTURE) return;
+    glGetFramebufferAttachmentParameterivEXT(GL_FRAMEBUFFER_EXT,
+        GL_COLOR_ATTACHMENT0_EXT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT, &name);
+    s = g_hash_table_lookup(gh.surfaces, GUINT_TO_POINTER(name));
+    last = g_hash_table_lookup(gh.surfaces, GUINT_TO_POINTER(gh.frame_tex));
+    if (!s || !last) return;                    /* an offscreen pass first: wait for the display */
+    if (s->width != last->width || s->height != last->height || s->format != last->format ||
+        s->window != last->window || s->target != last->target) {
+        return;
+    }
+    gh.frame_pending = false;
+    if ((GLuint)name == gh.frame_tex || s->dirty || s->detached) return;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_fb);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_fb);
+    scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+    if (!gh.sync_fbo) gh.sync_fbo = gles_private_name(glIsFramebufferEXT);
+    if (!gh.copy_fbo) gh.copy_fbo = gles_private_name(glIsFramebufferEXT);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, gh.sync_fbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, last->target, gh.frame_tex, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, gh.copy_fbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s->target, name, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBlitFramebuffer(0, 0, s->width, s->height, 0, 0, s->width, s->height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glColorMask(mask[0], mask[1], mask[2], mask[3]);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s->target, 0, 0);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, last->target, 0, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fb);
+    if (glGetError() != GL_NO_ERROR) {
+        gles_refuse("surface:copy-back");
+        return;
+    }
+    s->dirty = true;                            /* newer than its memory until the frame is written */
+#endif
 }
 
 /* ------------------------------------------------------------ ES 2.0 -------
@@ -7411,6 +7486,7 @@ static int64_t gles_host_call_1(CPUState *cpu, uint32_t slot, uint32_t ctx,
         gh.bound_framebuffer = a[1];
         gh.fb_dirty = true;
         glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, gles_host_fbo(a[1]));
+        if (a[1]) gles_copy_back();
         return 0;
 
     case GLES_SLOT_RENDERBUFFER_STORAGE: /* target, internalformat, w, h */
