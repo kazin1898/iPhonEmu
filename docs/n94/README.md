@@ -420,9 +420,14 @@ Setup's welcome page cross-fades its languages and shimmers "slide to set up"):
 | software (`CA_ENABLE_OGL=0`) | 193 s, 263 s | 8.6, 9.3 frames/s |
 | GL bridge (ANGLE / D3D11) | 208 s, 223 s | 10.2, 9.1 frames/s |
 
-No gain yet worth the name: the two are within the run-to-run spread. The guest's single TCG core is the
-limit either way; the GL path moves the compositing to the GPU but adds a trap per GL call and a 640x960
-readback per frame into guest memory.
+No gain yet worth the name: the two are within the run-to-run spread. Profiled afterwards
+(`docs/windows-gl.md`, "Where a frame's time goes"), neither the bridge nor the TCG core is the limit: a frame
+costs the host 3.4 ms (3.0 of it the 640x960 writeback), the guest idles in `wfi` for ~70% of the animation,
+the shimmer has new content on every second VBL (30 frames/s by itself), and the screendump count is diluted
+by a 20 s window around ~8 s of animation. What did hold it down was the display's VBL, which ran at 57 Hz,
+and at 32 Hz whenever Windows 11 dropped the timer resolution of QEMU's minimized or covered window: with
+the VBL on a fixed grid and QEMU opted out of that throttling, the minimized case went from 20 to 30 new
+frames/s.
 
 A clone of `runs/n94/nand` (the M4 unit's store, `E:/iphonemu-gl/devices/m4gl`, its `markers.json` pointed
 at the GL system volume and no install boot, which would rewrite `.GlobalPreferences.plist` and the data
@@ -431,8 +436,8 @@ list, not the home screen, so the home screen and the stock apps on the bridge w
 (the Terms page is the user's to accept; not done here). Setup in Portuguese drawn by the bridge:
 `2026-10-18_GL_setup-pais-pt.png`; a page transition (Voltar) caught mid-slide:
 `2026-10-18_GL_setup-transicao-pagina.png`, the whole slide in one intermediate frame (3 changed frames in
-8 s of sampling), against ~20 on the phone. Open: where a GL frame's guest time goes (the profiling session),
-the home screen and apps on the bridge, and the second core.
+8 s of sampling), against ~20 on the phone. Open: that transition's frames (counted by swaps and GL frames,
+not screendumps, as in `docs/windows-gl.md`), the home screen and apps on the bridge, and the second core.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

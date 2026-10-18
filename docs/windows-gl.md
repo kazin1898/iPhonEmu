@@ -70,8 +70,53 @@ iOS 6.1.3 on `-M iPhone-4S` boots to Setup with backboardd's CoreAnimation compo
 OpenGL ES 3.0.0 (ANGLE ...) Direct3D11`, `CoreAnimation composites through the host`). Against software
 CoreAnimation on the same unit (two boots each, numbers in docs/n94/README.md "GPU"): boot to Setup's
 welcome page 193/263 s in software, 208/223 s through the bridge; its animation 8.6/9.3 against 10.2/9.1
-frames/s. The same within the spread: one TCG core is the limit, and every frame costs a trap per GL call and
-a 640x960 readback into guest memory.
+frames/s. The same within the spread; the profile below says why, and it is neither the bridge nor the TCG core.
+
+## Where a frame's time goes (2026-10-18)
+
+Measured on the same unit with `-trace gles_obj_log` (every 10 s: calls, draws, flushes, the host time in
+them, the traps that carried them and the frames written back), `-trace gles_call_log` (every call at
+guest-virtual microseconds, switched on for a second with QMP `trace-event-set-state`, in order with the
+display's `s5l8930_display_log` swap lines), the display's `swaps` and `frame-timeline` properties (one entry
+per VBL), the host's per-thread CPU time and gdbstub PC samples. Setup's welcome page after a Home press:
+
+| per CoreAnimation frame | |
+|---|---|
+| GL calls / traps | 60-63 / ~45 (the command buffer merges only 2 calls per batch trap: CA's frame is mostly calls that return something) |
+| draws, flushes | 5, 1 |
+| host time | 3.4 ms, of which 3.0 ms is the writeback (`glReadPixels` of the 640x960 BGRA surface, 2.4 MB, into guest RAM) |
+| first to last GL call | 4.3-6.5 ms of guest time |
+
+So the bridge costs ~6% of the wall time while the page animates. The guest is not busy either: the vCPU
+thread runs at ~50% of a core (host GL included), and 69% of 659 PC samples were in the kernel's idle `wfi`
+(0x8008714c on 10B329), 8% in a timer read loop, ~10% in user code. CoreAnimation swaps on every VBL but has
+new content on every second one (the others re-swap the same buffer after 2 calls): this shimmer runs at 30
+frames/s by itself. And `measure.py`'s frames/s is not a frame rate: the page animates for ~8 s after the
+Home press, inside a 20 s window of ~50 screendumps/s.
+
+What did limit it: **the VBL**. The A5 display model's 60 Hz tick (`hw/arm/s5l8930_display.c`) was re-armed
+at "now + 16.7 ms", so each tick's wake-up latency was added to the period: 17.4 ms (57 Hz) at the 1 ms host
+timer, and 31.2 ms (32 Hz) for the 127 s an SDL window of QEMU sat behind other windows. Windows 11 stops
+honoring `timeBeginPeriod` for a process whose windows are all minimized or covered: a probe's `Sleep(1)` went
+from 1.8 ms to 15.7 ms a few seconds after its window was minimized, and back to 1.8 ms with
+`PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION`. Every guest timer fires that late too. Two fixes:
+
+- `os-win32.c` opts QEMU out of that throttling (`SetProcessInformation(ProcessPowerThrottling)`, next to the
+  `timeBeginPeriod` it already made);
+- the VBL runs on a fixed grid (a late tick is followed by an early one; more than a period behind, the grid
+  restarts from now, as `ipod_touch_lcd.c` does).
+
+A/B on the same unit, the SDL window minimized right after start, the same three traced seconds after a Home
+press:
+
+| build | VBL while animating | new frames/s | `measure.py` (screendumps) | boot to the welcome page |
+|---|---|---|---|---|
+| before | ~33 Hz (43.2 Hz over 40 s) | 20.1, 20.7, 20.1 | 9.24 | 213 s |
+| after | ~54 Hz (58.4 Hz over 40 s) | 30.4, 29.3, 30.7 | 8.60 | 243 s |
+
+The page now reaches its own 30 frames/s with the window minimized (26.5 before with it in front, at 57 Hz).
+The screendump number does not move, as above, and one boot each is inside the 193-263 s spread. What is left
+on the host is the writeback; it would matter to a guest that renders every VBL, which this page does not.
 
 ## Limitations
 
