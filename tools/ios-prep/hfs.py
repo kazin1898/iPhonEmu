@@ -312,20 +312,56 @@ class Volume:
         self.f.seek(self.fork_offset(self.catalog_fork, at))
         self.f.write(data)
 
+    def truncate(self, path):
+        """Empty the data fork of the file at `path`, its blocks back to the free pool: the donor of blocks
+        on a full volume (the IPSW's root has none free). Only for forks whose extents are all in the
+        record (none in the overflow file); the number of blocks freed."""
+        rec = self.resolve(self.lookup(path))
+        if not isinstance(rec, FileRecord):
+            raise IsADirectoryError(path)
+        if rec.compressed or sum(c for _, c in rec.data.extents) != rec.data.total_blocks:
+            raise ValueError(f"{path}: compressed or with extents in the overflow file")
+        bm = self.bitmap()
+        for start, count in rec.data.extents:
+            for b in range(start, start + count):
+                bm[b >> 3] &= ~(0x80 >> (b & 7)) & 0xff
+        self.write_bitmap(bm)
+        self.free_blocks += rec.data.total_blocks
+        self.write_header()
+        r = bytearray(self.catalog[rec.at + rec.data_off:rec.at + rec.data_off + 248])
+        r[88:168] = Fork.pack(0, [])
+        self.write_catalog_bytes(rec.at + rec.data_off, bytes(r))
+        self.f.flush()
+        return rec.data.total_blocks
+
     def set_file_data(self, path, data, mode=None):
-        """Give the file at `path` (it must exist) `data` as a fresh, uncompressed data fork."""
+        """Give the file at `path` (it must exist) `data` as an uncompressed data fork: in the fork's own
+        blocks when it fits there (a full volume, as the IPSW's root is), else in fresh ones."""
         rec = self.resolve(self.lookup(path))
         if not isinstance(rec, FileRecord):
             raise IsADirectoryError(path)
         n = max(1, -(-len(data) // self.block_size))
-        first = self.allocate(n)
-        self.f.seek(first * self.block_size)
-        self.f.write(bytes(data).ljust(n * self.block_size, b"\0"))
+        if not rec.compressed and rec.data.extents and sum(c for _, c in rec.data.extents) >= n:
+            extents, off = [], 0
+            for start, count in rec.data.extents:
+                take = min(count, n - sum(c for _, c in extents))
+                if take <= 0:
+                    break
+                self.f.seek(start * self.block_size)
+                self.f.write(bytes(data[off:off + take * self.block_size]).ljust(take * self.block_size, b"\0"))
+                extents.append((start, take))
+                off += take * self.block_size
+            first = extents[0][0]
+        else:
+            first = self.allocate(n)
+            self.f.seek(first * self.block_size)
+            self.f.write(bytes(data).ljust(n * self.block_size, b"\0"))
+            extents = [(first, n)]
         r = bytearray(self.catalog[rec.at + rec.data_off:rec.at + rec.data_off + 248])
         r[41] &= ~UF_COMPRESSED & 0xff
         if mode is not None:
             struct.pack_into(">H", r, 42, (u16(r, 42) & 0o170000) | mode)
-        r[88:168] = Fork.pack(len(data), [(first, n)])
+        r[88:168] = Fork.pack(len(data), extents)
         self.write_catalog_bytes(rec.at + rec.data_off, bytes(r))
         self.f.flush()
         return first, n

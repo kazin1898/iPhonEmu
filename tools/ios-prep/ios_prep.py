@@ -306,6 +306,22 @@ def cmd_install(args):
         "--add-boot-arg nand-enable-reformat=1, then boot with nand=NAND; stop at \"it_install: done\"")
 
 
+def cmd_sysvol(args):
+    """launchd jobs on the system volume image: console output, environment (sysvol.py)."""
+    import sysvol
+    rootfs = os.path.join(args.dir, "rootfs.hfs")
+    if args.asl_console:
+        sysvol.asl_console(rootfs)
+        log(f"{rootfs}: asl.conf copies every message to /dev/console")
+    if args.show or not (args.console or args.env):
+        jobs = sysvol.show_jobs(rootfs, args.job)
+    else:
+        jobs = sysvol.edit_jobs(rootfs, args.job, console=args.console, env=args.env)
+        log(f"{rootfs}: {len(jobs)} job(s) rewritten; the guest reads them at its next boot")
+    for label, d in jobs.items():
+        print(label, {k: d[k] for k in ("StandardOutPath", "StandardErrorPath", "EnvironmentVariables") if k in d})
+
+
 def cmd_inventory(args):
     rows, kexts, ver = write_inventory(args.dir, args.docs)
     print(ver)
@@ -369,6 +385,17 @@ def main():
     p.add_argument("dir")
     p.add_argument("--docs")
     p.set_defaults(fn=cmd_inventory)
+    p = sub.add_parser("sysvol", help="edit launchd jobs on rootfs.hfs (the page store serves it to the guest)")
+    p.add_argument("dir", help="the prepared firmware directory (rootfs.hfs)")
+    p.add_argument("--job", action="append", default=[], metavar="LABEL",
+                   help="a launchd job label (repeatable), e.g. com.apple.backboardd")
+    p.add_argument("--console", action="store_true", help="the jobs' stdout and stderr to /dev/console")
+    p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE",
+                   help="an EnvironmentVariables entry for the jobs (repeatable), e.g. CA_ENABLE_OGL=0")
+    p.add_argument("--asl-console", action="store_true",
+                   help="asl.conf: syslogd copies every message to /dev/console (the daemons' log on the serial console)")
+    p.add_argument("--show", action="store_true", help="print the jobs as they are, change nothing")
+    p.set_defaults(fn=cmd_sysvol)
     args = ap.parse_args()
     args.fn(args)
 
