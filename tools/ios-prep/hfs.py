@@ -2,11 +2,13 @@
 
 Reads any file of a volume, following hard links ('hlnk' records into the private-data folder) and
 HFS compression (UF_COMPRESSED + the com.apple.decmpfs attribute, inline or in the resource fork, zlib
-or stored). Edits only in place, so no B-tree is ever restructured:
+or stored). Edits only in place, so no B-tree is ever restructured (a new record goes into a leaf with room):
 
 - set_file_data(path, data) gives an existing file a new, uncompressed data fork: the bytes go in
   freshly allocated contiguous blocks, the catalog record's data fork is rewritten in place and its
   UF_COMPRESSED flag cleared (the decmpfs attribute stays behind, unread);
+- create_file(path, data) adds a file to an existing folder (a catalog record inserted into the leaf node
+  its key sorts into, when that node has room);
 - grow(total_blocks) adds free space at the end, up to what the allocation file's bitmap can describe,
   and moves the alternate volume header.
 
@@ -333,6 +335,96 @@ class Volume:
         self.write_catalog_bytes(rec.at + rec.data_off, bytes(r))
         self.f.flush()
         return rec.data.total_blocks
+
+    def _folder_record(self, folder_id):
+        """(offset in the catalog, data offset, type, length) of the folder record whose ID is folder_id."""
+        for at, do, rtype, rlen in self.index().values():
+            if rtype == REC_FOLDER and u32(self.catalog, at + do + 8) == folder_id:
+                return at, do, rtype, rlen
+        raise FileNotFoundError(f"{self.path}: no folder record for ID {folder_id}")
+
+    def create_file(self, path, data=b"", mode=0o644, uid=0, gid=0):
+        """A new file at `path` (its folder must exist) with `data` as an uncompressed data fork; its
+        catalog record goes into the leaf node its key sorts into, which must have room for it (the one
+        restructuring this module does not do is a node split). HFSX (binary-compared keys) only. No file
+        thread record is made and none is flagged: they are optional in HFS+. Returns the new file ID."""
+        if self.vh[0:2] != b"HX" or self.catalog[14 + 37] != 0xBC:
+            raise ValueError(f"{self.path}: create_file needs HFSX with binary key compare")
+        parts = [p for p in path.split("/") if p]
+        parent = self.lookup("/" + "/".join(parts[:-1]))
+        if not isinstance(parent, int):
+            raise NotADirectoryError(path)
+        name = parts[-1]
+        if (parent, name) in self.index():
+            raise FileExistsError(path)
+        enc = name.encode("utf-16-be")
+        key = struct.pack(">HIH", 6 + len(enc), parent, len(enc) // 2) + enc
+        sort_key = (parent, [u16(enc, i) for i in range(0, len(enc), 2)])
+
+        # the folder's record: its dates for the file's, and its valence to count the file
+        pat, pdo, _, plen = self._folder_record(parent)
+        prec = bytes(self.catalog[pat:pat + plen])
+        fid = u32(self.vh, 64)
+        n = -(-len(data) // self.block_size)
+        extents = []
+        if n:
+            first = self.allocate(n)
+            self.f.seek(first * self.block_size)
+            self.f.write(bytes(data).ljust(n * self.block_size, b"\0"))
+            extents = [(first, n)]
+        when = u32(prec, pdo + 16)
+        rec = bytearray(248)
+        struct.pack_into(">HHII", rec, 0, REC_FILE, 0, 0, fid)
+        struct.pack_into(">IIIII", rec, 12, when, when, when, when, 0)
+        struct.pack_into(">IIBBHI", rec, 32, uid, gid, 0, 0, 0o100000 | mode, 0)
+        rec[88:168] = Fork.pack(len(data), extents)
+        rec[168:248] = Fork.pack(0, [])
+        record = key + bytes(rec)
+
+        # the leaf and the place in it: after the last record whose key sorts before the new one
+        node_size = self.cat_node
+        target = None
+        for idx, at, r in self.leaf_records(self.catalog):
+            rk = (u32(r, 2), [u16(r, 8 + i) for i in range(0, 2 * u16(r, 6), 2)])
+            if rk < sort_key:
+                target = (idx, (at - idx * node_size))
+            else:
+                break
+        if target is None:
+            raise ValueError(f"{path}: would be the catalog's first key")
+        idx, after = target
+        base = idx * node_size
+        node = bytearray(self.catalog[base:base + node_size])
+        nrec = u16(node, 10)
+        offs = [u16(node, node_size - 2 * (i + 1)) for i in range(nrec + 1)]
+        pos = offs.index(after) + 1                      # the new record's index in the node
+        free_end = node_size - 2 * (nrec + 2)
+        if offs[nrec] + len(record) > free_end:
+            raise OSError(f"{path}: catalog node {idx} has {free_end - offs[nrec]} bytes free, the record needs "
+                          f"{len(record)} (a node split is not implemented)")
+        at = offs[pos]
+        node[at + len(record):offs[nrec] + len(record)] = node[at:offs[nrec]]
+        node[at:at + len(record)] = record
+        offs = offs[:pos] + [at] + [o + len(record) for o in offs[pos:]]
+        for i, o in enumerate(offs):
+            struct.pack_into(">H", node, node_size - 2 * (i + 1), o)
+        struct.pack_into(">H", node, 10, nrec + 1)
+        self.write_catalog_bytes(base, bytes(node))
+
+        # the B-tree header's leaf record count, the folder's valence, the volume's file count and next ID
+        hdr = bytearray(self.catalog[14:14 + 10])
+        struct.pack_into(">I", hdr, 6, u32(hdr, 6) + 1)
+        self.write_catalog_bytes(14, bytes(hdr))
+        self._index = None              # the insert moved records after it, the folder's own perhaps
+        pat, pdo, _, plen = self._folder_record(parent)
+        prec = bytearray(self.catalog[pat:pat + plen])
+        struct.pack_into(">I", prec, pdo + 4, u32(prec, pdo + 4) + 1)
+        self.write_catalog_bytes(pat, bytes(prec))
+        struct.pack_into(">I", self.vh, 32, u32(self.vh, 32) + 1)
+        struct.pack_into(">I", self.vh, 64, fid + 1)
+        self.write_header()
+        self._index = None
+        return fid
 
     def set_file_data(self, path, data, mode=None):
         """Give the file at `path` (it must exist) `data` as an uncompressed data fork: in the fork's own

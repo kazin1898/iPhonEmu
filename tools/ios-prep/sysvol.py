@@ -23,13 +23,14 @@ JOBS = "/System/Library/LaunchDaemons/%s.plist"
 DONOR = "/usr/standalone/update/ramdisk/H4SURamDisk.dmg"     # used only by an OTA update
 
 
-def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disabled=None, donor=DONOR):
+def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disabled=None, donor=DONOR, unset=()):
     """Edit the launchd jobs `jobs` (labels) on `rootfs`; returns {label: new plist dict}. `program`
     replaces the job's ProgramArguments (a stock binary of the system volume, e.g. /bin/launchctl list,
     whose job table on the console tells which daemons run and how the last ones exited) and `interval`
     sets StartInterval, launchd re-running the job every that many seconds. `disabled` True sets the
     plist's Disabled key, False removes it (the stock plists have none): a disabled job is not loaded and its Mach services are not
-    registered, so a client's lookup fails at once instead of waiting on a daemon that never answers."""
+    registered, so a client's lookup fails at once instead of waiting on a daemon that never answers.
+    `unset` removes those environment variables (and EnvironmentVariables, when it is left empty)."""
     out, stock = {}, show_jobs(rootfs, jobs)
     for label in jobs:
         d = copy.deepcopy(stock[label])
@@ -40,6 +41,10 @@ def edit_jobs(rootfs, jobs, console=True, env=(), program=None, interval=0, disa
         for kv in env:
             k, _, val = kv.partition("=")
             d.setdefault("EnvironmentVariables", {})[k] = val
+        for k in unset:
+            d.get("EnvironmentVariables", {}).pop(k, None)
+            if d.get("EnvironmentVariables") == {}:
+                del d["EnvironmentVariables"]
         if program:
             d.pop("Program", None)
             d["ProgramArguments"] = list(program)
