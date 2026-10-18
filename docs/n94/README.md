@@ -13,6 +13,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot; B4 the same day: effaceable storage formatted and the system keybag created by the install boot, keybagd running (see "B4") |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | `runs/n94/progress/2026-10-18_M3_setup-assistant.png` | **done** 2026-10-18: Setup Assistant's language list at 640x960 after 22 minutes of emulated boot (the AE2 audio path, the data volume's skeleton and protection; see "M3") |
 | M4 | slide to unlock, the home screen, stock apps | `runs/n94/progress/2026-10-18_M4_tela-inicial.png` | **done** 2026-10-18: Setup walked by touch to the end, the home screen, Ajustes open, lock and slide to unlock back to the home screen (the touch and buttons, and the activation by lockdownd's short-circuit; see "Activation") |
+| GPU | CoreAnimation through the GL bridge on Windows | `runs/n94/progress/2026-10-18_GL_setup-boas-vindas-angle.png` | **done** to Setup 2026-10-18: OpenGL ES on ANGLE over Direct3D 11, Setup's welcome page drawn by the PC's GPU; no measurable speed-up yet (see "GPU") |
 
 ## Preparing the firmware
 
@@ -375,6 +376,54 @@ thread queue at task+0x28, a thread's next at +0x230, its user registers at +0x2
 second word is the physical L1 table), symbolized from the shared cache's export tables with the boot's
 slide (`mach_msg_trap`'s return address). A gdbstub breakpoint on `objc_exception_throw` caught assetsd's
 exception.
+
+### GPU: CoreAnimation through the GL bridge, on Windows (2026-10-18)
+
+backboardd's CoreAnimation renders with OpenGL ES 2.0 again (no `CA_ENABLE_OGL=0`), and the GL runs on the
+PC's GPU: the fork's front end (`contrib/gles-public`, a replacement `OpenGLES.framework/OpenGLES`) traps
+every call to QEMU (`n94.c` now takes the A4 boards' cp15 `QEMU_CALL` register), `hw/arm/gles-host.c`
+executes it on ANGLE over Direct3D 11, and each finished frame is written back into the display surface
+the A5 pipe scans out. Build, dependencies and limitations: `docs/windows-gl.md`.
+Setup's welcome page drawn this way: `runs/n94/progress/2026-10-18_GL_setup-boas-vindas-angle.png`.
+
+On a unit (`E:/iphonemu-gl` here, so the shared `firmware/n94_10B329/rootfs.hfs` stays in software):
+
+```
+python tools/ios-prep/gles_frontend.py build OUT
+python tools/ios-prep/gles_frontend.py install FIRMWARE/rootfs.hfs OUT/OpenGLES    # a firmware dir of the unit's own
+python tools/ios-prep/ios_prep.py device refresh NAME                              # markers again, then boot as usual
+```
+
+The host log (QEMU's stderr) shows the bridge: `[gles-angle] context api=2 ... OpenGL ES 3.0.0 (ANGLE ...)
+Direct3D11`, `[gles] CoreAnimation composites through the host (first macro context)`, and any call it
+could not run as `[gles] REFUSED ...` (none on the way to Setup). What it took:
+
+1. **The front end without an SDK.** `tools/ios-prep/macho_dylib.py` links clang's armv7 object into the
+   dylib dyld-212 loads (`ld64.lld` has no armv7); `hfs.Volume.create_file` adds it and dyld's
+   `enable-dylibs-to-override-cache` to the system volume (6.x keeps OpenGLES only in the shared cache).
+   First boot: every UIKit process loaded it, and backboardd died in `[super init]` of `EAGLContext`:
+   the linker resolved a pointer to the first string of `__objc_methname` as the end of the section
+   before it, so `init`'s selector reference pointed into `__objc_selrefs` itself. Fixed (containment
+   wins over "ends here"), and the build's check now compares the strings every pointer reaches.
+2. **The hello.** The front end's `QC_GLES_HELLO` is served by `hw/arm/guest-package.c`, now wired to n94.
+3. **ANGLE is strict ES.** BGRA/ALPHA/LUMINANCE uploads need the internal format equal to the format
+   (Apple's EAGL took RGBA storage for BGRA texels): the surfaces failed with `GL_INVALID_OPERATION`, the
+   framebuffers stayed incomplete. ES1 takes the `*OES` framebuffer calls and ES2 only the core ones.
+   `APPLE_fence` is answered as signaled.
+
+**Measured** (same 16 GiB unit, migration done, one vCPU, Radeon RX 5500 XT; screendump every 5 s for the
+boot, then 20 s of screendumps as fast as QMP answers, ~54/s, counting the frames that changed while
+Setup's welcome page cross-fades its languages and shimmers "slide to set up"):
+
+| CoreAnimation | boot to Setup's welcome page | its animation |
+|---|---|---|
+| software (`CA_ENABLE_OGL=0`) | 193 s, 263 s | 8.6, 9.3 frames/s |
+| GL bridge (ANGLE / D3D11) | 208 s, 223 s | 10.2, 9.1 frames/s |
+
+No gain yet worth the name: the two are within the run-to-run spread. The guest's single TCG core is the
+limit either way; the GL path moves the compositing to the GPU but adds a trap per GL call and a 640x960
+readback per frame into guest memory. Open: the home screen and an app on the bridge (Setup's Terms page
+needs the user's OK on a fresh unit), profiling where a GL frame's guest time goes, and the second core.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

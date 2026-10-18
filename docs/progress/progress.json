@@ -85,13 +85,13 @@
           "name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel",
           "percent": 85,
           "weight": 5,
-          "note": "Setup Assistant on screen (M3): AppleCLCD adopts the framebuffer, software CoreAnimation swaps through the A5 layer MMU; GPU path and RGBOUT/TV-out open"
+          "note": "Setup Assistant on screen (M3): AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; RGBOUT/TV-out open"
         },
         {
           "name": "GPU: GL bridge on Windows (ANGLE)",
-          "percent": 0,
+          "percent": 60,
           "weight": 6,
-          "note": "the fork's host executor is macOS-only; an EGL/ANGLE backend is new work"
+          "note": "CoreAnimation composites through ANGLE/D3D11 up to Setup (front end built without macOS); home screen and apps on it, and a speed-up over software, still open"
         },
         {
           "name": "Multitouch (SPI) and buttons",
