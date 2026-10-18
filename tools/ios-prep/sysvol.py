@@ -80,6 +80,31 @@ def asl_console(rootfs, donor=DONOR):
         v.close()
 
 
+LOCKDOWND = "/usr/libexec/lockdownd"
+
+
+def activation_shortcut(rootfs, donor=DONOR):
+    """lockdownd takes its development activation short-circuit unconditionally (lockdownd_patch.py): the
+    unit reports Activated without an Apple-issued record, which a synthetic identity cannot have. The
+    binary is stored uncompressed in place of its decmpfs copy; a second run finds it patched and leaves
+    it. Returns the patcher's report."""
+    import lockdownd_patch
+    v = hfs.Volume(rootfs, writable=True)
+    try:
+        old = v.read_file(LOCKDOWND)
+        new, report = lockdownd_patch.patch(old)
+        if new != old:
+            need = -(-len(new) // v.block_size)
+            if v.free_blocks < need + 64 and donor:
+                v.truncate(donor)
+            v.set_file_data(LOCKDOWND, new)
+            if v.read_file(LOCKDOWND) != new:
+                raise OSError(f"{rootfs}: {LOCKDOWND} reads back different from what was written")
+        return report
+    finally:
+        v.close()
+
+
 def show_jobs(rootfs, jobs):
     v = hfs.Volume(rootfs)
     try:

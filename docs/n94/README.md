@@ -12,7 +12,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | M1 | the kernel's console on uart0 | `runs/n94/m1-serial.log` | **done** 2026-10-17: IOKit matching through to `Still waiting for root device` |
 | M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot; B4 the same day: effaceable storage formatted and the system keybag created by the install boot, keybagd running (see "B4") |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | `runs/n94/progress/2026-10-18_M3_setup-assistant.png` | **done** 2026-10-18: Setup Assistant's language list at 640x960 after 22 minutes of emulated boot (the AE2 audio path, the data volume's skeleton and protection; see "M3") |
-| M4 | slide to unlock, the home screen, stock apps | screenshot | pending |
+| M4 | slide to unlock, the home screen, stock apps | `runs/n94/progress/2026-10-18_M4_tela-inicial.png` | **done** 2026-10-18: Setup walked by touch to the end, the home screen, Ajustes open, lock and slide to unlock back to the home screen (the touch and buttons, and the activation by lockdownd's short-circuit; see "Activation") |
 
 ## Preparing the firmware
 
@@ -274,6 +274,51 @@ thread queue at task+0x28, a thread's next at +0x230, its user registers at +0x2
 second word is the physical L1 table), symbolized from the shared cache's export tables with the boot's
 slide (`mach_msg_trap`'s return address). A gdbstub breakpoint on `objc_exception_throw` caught assetsd's
 exception.
+
+### Activation: lockdownd's short-circuit (2026-10-18)
+
+An emulated unit has no Apple-issued activation record (those are bound to a real unit's identity), so
+Setup's activation page needs lockdownd to report Activated on its own. On 10B329 the seeded data ark
+(`install --activation factory`) does not suffice. `dealwith_activation` (0xf1bc in lockdownd, sha256
+04d029e7...) sets `ActivationState = Activated` only through a development short-circuit: unless the ark
+sets `DisableHactivation`, it calls a predicate (`bl 0x1bca0; cmp r0, #1; beq.w`) and on 1 logs "Short
+circuiting activation state to Activated." Otherwise it looks for a record (POD, DEFAULT, UNLOCK, CARE_FLAG,
+ICCID, WILDCARD) and ends in "Could not find an activation record". This matches the iPod 4's 6.x
+(docs/n81/README.md): the data ark held up to 10A523, and from 10B144 on a binary pattern was needed.
+
+`tools/ios-prep/lockdownd_patch.py` makes the short-circuit unconditional. The predicate's `bl` becomes
+`movs r0, #1` twice, and the `bne` past the DisableHactivation log becomes a `b` to the predicate. Both
+sites are found by shape and by the CFStrings their blocks log. Each must match exactly once or nothing is
+written, so the patch refuses other binaries and a second run finds the file already patched. The code
+signature's SHA-1 page hash is recomputed (AMFI is off here, so this only keeps the signature
+self-consistent). The result (sha256 f9287c33...) is byte-identical to Legacy-iOS-Kit's hacktivation patch
+for this build (`Down_iPhone2,1_6.1.3_10B329.bundle/lockdownd.patch`, a bspatch that kit applies through
+SSH on a jailbroken device). That kit is the cross-check only; the emulator writes its system volume
+directly and needs no jailbreak.
+
+```
+python tools/ios-prep/ios_prep.py sysvol ../firmware/n94_10B329 --activation-shortcut
+```
+
+The binary goes in uncompressed in place of its decmpfs copy (143 blocks from the donor, as `sysvol`'s
+plists do). Then an install boot refreshes the markers, as for any `sysvol` edit, followed by the normal boot.
+
+The result, shown by Setup since the NAND page store has no plaintext data ark to read back (no
+`ActivationState` string in either channel, raw or XOR):
+
+- With the stock lockdownd and the FactoryActivated ark, Setup stopped at its activation page, "Conecte ao
+  iTunes" (`runs/n94/progress/2026-10-18_activation_antes-conecte-itunes.png`).
+- With the patched lockdownd, after the install boot and a normal boot, Setup goes from language, country
+  and Location Services straight to "Configuração" (set up as a new iPhone), then Apple ID (skipped),
+  "Termos e Condições" (accepted), Diagnóstico ("Não Enviar") and "Obrigado!", to the home screen
+  (`2026-10-18_activation_depois-configuracao.png`, `2026-10-18_M4_tela-inicial.png`). No activation
+  page. Ajustes opens (Wi-Fi inactive, Bluetooth unavailable: those jobs are off). The power button locks,
+  and the lock screen's slider unlocks back to the home screen (`2026-10-18_M4_tela-bloqueio.png`).
+
+Walking it with `tools/dev/n94_input.py`: the welcome slider counts only while the panel is lit after a
+wake, which lasts under 10 s with no input, so the swipe goes right after the Home press: `key home ; wait
+1.5 ; swipe 105 862 610 862`. The Apple ID step's spinner waits about 90 s for the network before the
+Terms show.
 
 ### State at M1 (2026-10-17, `runs/n94/m1-serial.log`)
 

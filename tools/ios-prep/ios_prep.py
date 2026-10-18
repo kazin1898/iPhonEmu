@@ -314,6 +314,12 @@ def cmd_sysvol(args):
     if args.asl_console:
         sysvol.asl_console(rootfs)
         log(f"{rootfs}: asl.conf copies every message to /dev/console")
+    if args.activation_shortcut:
+        import lockdownd_patch
+        try:
+            log(f"{rootfs}: lockdownd: {sysvol.activation_shortcut(rootfs)}")
+        except lockdownd_patch.PatchError as e:
+            raise SystemExit(f"{rootfs}: lockdownd left stock: {e}")
     if args.output:
         args.console = args.output
     if args.show or not (args.console or args.env or args.program or args.interval or args.disable is not None):
@@ -409,6 +415,9 @@ def main():
                         "services; false: back on)")
     p.add_argument("--asl-console", action="store_true",
                    help="asl.conf: syslogd copies every message to /dev/console (the daemons' log on the serial console)")
+    p.add_argument("--activation-shortcut", action="store_true",
+                   help="lockdownd takes its activation short-circuit unconditionally (lockdownd_patch.py; 6.1.x "
+                        "needs it, a seeded FactoryActivated does not hold there); fails closed on another binary")
     p.add_argument("--show", action="store_true", help="print the jobs as they are, change nothing")
     p.set_defaults(fn=cmd_sysvol)
     args = ap.parse_args()
