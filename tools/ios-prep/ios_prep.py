@@ -257,6 +257,8 @@ def cmd_prepare(args):
         else:
             hfs, info = expand_rootfs(ip, keys, out, keep_dmg=args.keep_dmg)
             hashes["rootfs"] = info
+        if not args.stock_lockdownd:
+            hashes["activation"] = activation_shortcut(os.path.join(out, "rootfs.hfs"))
     write_inventory(out, args.docs)
     build_kboot(out, args, ip)
     for name in ("kernelcache.mach", "DeviceTree.bin", "iBoot.bin", "kboot.bin", "rootfs.hfs"):
@@ -266,6 +268,21 @@ def cmd_prepare(args):
     with open(os.path.join(out, "hashes.json"), "w") as f:
         json.dump(hashes, f, indent=2)
     log("done")
+
+
+def activation_shortcut(rootfs):
+    """lockdownd's activation short-circuit on the system volume (sysvol.activation_shortcut): what every
+    virtual unit made from this firmware needs to get past Setup's activation page, since none has an
+    Apple-issued record. Idempotent. On a lockdownd the patcher does not recognize (another build) it logs
+    why and leaves the binary stock instead of failing the preparation; returns the report."""
+    import lockdownd_patch
+    import sysvol
+    try:
+        report = sysvol.activation_shortcut(rootfs)
+    except lockdownd_patch.PatchError as e:
+        report = f"stock lockdownd kept ({e}); Setup may stop at its activation page"
+    log(f"lockdownd: {report}")
+    return report
 
 
 def cmd_kboot(args):
@@ -314,12 +331,8 @@ def cmd_sysvol(args):
     if args.asl_console:
         sysvol.asl_console(rootfs)
         log(f"{rootfs}: asl.conf copies every message to /dev/console")
-    if args.activation_shortcut:
-        import lockdownd_patch
-        try:
-            log(f"{rootfs}: lockdownd: {sysvol.activation_shortcut(rootfs)}")
-        except lockdownd_patch.PatchError as e:
-            raise SystemExit(f"{rootfs}: lockdownd left stock: {e}")
+    if args.activation_shortcut and activation_shortcut(rootfs).startswith("stock"):
+        raise SystemExit(1)
     if args.output:
         args.console = args.output
     if args.show or not (args.console or args.env or args.program or args.interval or args.disable is not None):
@@ -370,6 +383,9 @@ def main():
     p.add_argument("--skip-rootfs", action="store_true")
     p.add_argument("--redo-rootfs", action="store_true")
     p.add_argument("--keep-dmg", action="store_true", help="keep the decrypted UDIF beside rootfs.hfs")
+    p.add_argument("--stock-lockdownd", action="store_true",
+                   help="leave lockdownd as the IPSW has it (by default it takes its activation short-circuit, "
+                        "lockdownd_patch.py, so a new unit gets past Setup's activation page)")
     add_kboot_opts(p)
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser("kboot")

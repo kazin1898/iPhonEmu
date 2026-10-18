@@ -296,6 +296,12 @@ for this build (`Down_iPhone2,1_6.1.3_10B329.bundle/lockdownd.patch`, a bspatch 
 SSH on a jailbroken device). That kit is the cross-check only; the emulator writes its system volume
 directly and needs no jailbreak.
 
+`ios_prep.py prepare` applies it by default, right after the rootfs is expanded. The system volume is
+per firmware, so every virtual unit made from that IPSW gets it, and a re-run finds it already done
+(`hashes.json` "activation" records the outcome; `--stock-lockdownd` leaves the IPSW's binary). On a
+lockdownd the patcher does not recognize, `prepare` logs why and goes on with the stock binary. A
+firmware directory prepared before this takes it with:
+
 ```
 python tools/ios-prep/ios_prep.py sysvol ../firmware/n94_10B329 --activation-shortcut
 ```
