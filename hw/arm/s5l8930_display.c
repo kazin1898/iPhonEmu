@@ -48,6 +48,24 @@
 #define DP_UI_DST_ORIGIN    0x54      /* x << 16 | y on the panel */
 #define DP_UI_SRC_SIZE      0x60      /* w << 16 | h of the source buffer */
 #define DP_UI_DST_END       0x64      /* x1 << 16 | y1, the destination's far corner */
+/*
+ * The A5's pipe (AppleH4PDisplayPipe, 10B329 0x808cc830 program_hardware and 0x808ca1a8
+ * start_hardware) keeps 0x40-0x48 and moves the window: the source size to 0x50 (its crop at 0x4c),
+ * the destination origin to 0x60 and its far corner to 0x70 (start_hardware adopts iBoot's width as
+ * 0x70.hi - 0x60.hi). It also has an MMU per layer in place of a DART: 0x90 bit0 on, and 0x98 + 4k
+ * the physical address of the page table for the layer's k-th 4 MiB (populateUIMMUTable 0x808cc30c:
+ * 1024 words, PA | 1, one per 4 KiB page of the surface from its first page).
+ */
+#define DP_H4P_UI_SRC_CROP  0x4c
+#define DP_H4P_UI_SRC_SIZE  0x50
+#define DP_H4P_UI_DST_ORIGIN 0x60
+#define DP_H4P_UI_DST_END   0x70
+#define DP_H4P_UI_MMU_CTRL  0x90
+#define DP_H4P_UI_MMU_PT    0x98      /* 16 words: the page tables of 4 MiB chunks 0..15 */
+#define DP_H4P_UI_MMU_PTS   16
+
+#define PIPE_GEN_H3         3         /* S5L8930 (A4): AppleDisplayPipe */
+#define PIPE_GEN_H4P        4         /* S5L8940 (A5): AppleH4PDisplayPipe */
 
 #define DP_IRQ_VBL          0x001
 #define DP_IRQ_SWAP_DONE    0x100
@@ -80,6 +98,7 @@ typedef struct {
     uint32_t pkt_off;
     uint32_t swap_id;
     bool swap_pending;       /* a swap arrived since the last VBL */
+    uint8_t index;           /* 0 = DisplayPipe0, 1 = RGBOUT's (for the trace) */
     uint32_t panel;          /* pipe0: w << 16 | h of a panel= override (issue #21), 0 = none */
     uint32_t native;         /* pipe0: w << 16 | h of the board's panel, the geometry iBoot programs */
 } DisplayPipe;
@@ -89,6 +108,8 @@ typedef struct UILayer {
     uint32_t fmt, base, stride;
     unsigned sw, sh;                 /* source size */
     unsigned x0, y0, x1, y1;         /* destination rectangle, clipped to the panel */
+    bool mmu;                        /* H4P: the layer's MMU is on, pt[] its page tables */
+    uint32_t pt[DP_H4P_UI_MMU_PTS];
 } UILayer;
 
 struct S5L8930DisplayState {
@@ -102,6 +123,7 @@ struct S5L8930DisplayState {
     uint16_t width, height;  /* properties: the board's panel, as iBoot programs it */
     uint32_t pw, ph;         /* "panel-width"/"panel-height": panel= override (issue #21), 0 = the board's */
     uint32_t refresh_hz;     /* "refresh-hz": the VBL's rate, 60 as on the devices */
+    uint8_t gen;             /* "generation": PIPE_GEN_H3 (A4) or PIPE_GEN_H4P (A5), the UI window's layout */
 
     DisplayPipe pipe[2];     /* 0 = DisplayPipe0 (scanned out), 1 = RGBOUT */
     uint32_t clcd[2][CLCD_WORDS];
@@ -196,6 +218,8 @@ static uint32_t panel_word(const DisplayPipe *p, hwaddr addr, uint32_t v)
     case DP_SIZE:
     case DP_UI_BASE(0) + DP_UI_SRC_SIZE: case DP_UI_BASE(0) + DP_UI_DST_END:
     case DP_UI_BASE(1) + DP_UI_SRC_SIZE: case DP_UI_BASE(1) + DP_UI_DST_END:
+    case DP_UI_BASE(0) + DP_H4P_UI_SRC_SIZE: case DP_UI_BASE(0) + DP_H4P_UI_DST_END:
+    case DP_UI_BASE(1) + DP_H4P_UI_SRC_SIZE: case DP_UI_BASE(1) + DP_H4P_UI_DST_END:
         return v == native ? panel : v;
     case DP_UI_BASE(0) + DP_UI_STRIDE: case DP_UI_BASE(1) + DP_UI_STRIDE:
         return (v & ~0x3fu) == nw * 4 ? w * 4 | (v & 0x3f) : v;
@@ -248,6 +272,14 @@ static void pipe_fifo_write_word(DisplayPipe *p, uint32_t val)
     } else {                                    /* packet data */
         if (p->pkt_off < S5L8930_DISP_PIPE0_SIZE) {
             p->regs[p->pkt_off / 4] = val;
+        }
+        /* The register writes of the first swaps, to read a driver's layout off (bounded). */
+        if (trace_event_get_state_backends(TRACE_S5L8930_DISPLAY_LOG)) {
+            static unsigned n;
+            if (n++ < 2000) {
+                TRACE_PRINTF(trace_s5l8930_display_log, "[disp] pipe%u swap %u: pkt 0x%04x <- %08x\n",
+                             p->index, p->swap_id, p->pkt_off, val);
+            }
         }
         p->pkt_off += 4;
         p->pkt_left--;
@@ -536,12 +568,33 @@ hwaddr s5l8930_dart2_xlate(void *display, uint32_t va, unsigned sid)
     return s5l8930_dart_xlate(&S5L8930_DISPLAY(display)->dart, sid < S5L8930_DART_SIDS ? sid : 0, va);
 }
 
-/* Read `len` bytes of framebuffer at IOVA `va`, page by page. */
-static void fb_read(S5L8930DisplayState *s, uint32_t va, uint8_t *dst, unsigned len)
+/*
+ * The H4P layer MMU: addresses are the layer's own, from its base register on, so the page tables
+ * are walked from the base's page (populateUIMMUTable fills PTE 0 with the surface's first page, and
+ * the base is the surface's start). 16 tables of 1024 PTEs (PA | 1) cover 64 MiB.
+ */
+static hwaddr h4p_mmu_xlate(const UILayer *u, uint32_t va)
+{
+    uint32_t page = (va >> 12) - (u->base >> 12), pte;
+    uint32_t pt = page < DP_H4P_UI_MMU_PTS * 1024 ? u->pt[page >> 10] & ~0xfffu : 0;
+
+    if (!pt) {
+        return (hwaddr)-1;
+    }
+    pte = address_space_ldl_le(&address_space_memory, pt + (page & 0x3ff) * 4, MEMTXATTRS_UNSPECIFIED, NULL);
+    if (!(pte & 1)) {
+        qemu_log_mask(LOG_GUEST_ERROR, "display: invalid H4P PTE 0x%08x for iova 0x%08x\n", pte, va);
+        return (hwaddr)-1;
+    }
+    return (pte & ~0xfffu) | (va & 0xfff);
+}
+
+/* Read `len` bytes of framebuffer at IOVA `va`, page by page (`u`: the layer it belongs to, or NULL). */
+static void fb_read(S5L8930DisplayState *s, const UILayer *u, uint32_t va, uint8_t *dst, unsigned len)
 {
     while (len) {
         unsigned n = MIN(len, 0x1000 - (va & 0xfff));
-        hwaddr pa = dart_xlate(s, va);
+        hwaddr pa = u && u->mmu ? h4p_mmu_xlate(u, va) : dart_xlate(s, va);
 
         if (pa == (hwaddr)-1) {
             memset(dst, 0, n);
@@ -579,14 +632,22 @@ static bool scanout_layer(S5L8930DisplayState *s, int layer, unsigned w, unsigne
                           UILayer *u)
 {
     uint32_t *r = s->pipe[0].regs, *ui = r + DP_UI_BASE(layer) / 4;
-    uint32_t org = ui[DP_UI_DST_ORIGIN / 4], sz = ui[DP_UI_SRC_SIZE / 4];
-    uint32_t end = ui[DP_UI_DST_END / 4];
+    bool h4p = s->gen == PIPE_GEN_H4P;
+    uint32_t org = ui[(h4p ? DP_H4P_UI_DST_ORIGIN : DP_UI_DST_ORIGIN) / 4];
+    uint32_t sz = ui[(h4p ? DP_H4P_UI_SRC_SIZE : DP_UI_SRC_SIZE) / 4];
+    uint32_t end = ui[(h4p ? DP_H4P_UI_DST_END : DP_UI_DST_END) / 4];
 
     if (!(r[DP_LAYERS / 4] & (0x100 << layer))) {
         return false;
     }
     u->base = ui[DP_UI_ADDR / 4];
     u->fmt = (ui[DP_UI_FORMAT / 4] >> 8) & 7;
+    u->mmu = h4p && (ui[DP_H4P_UI_MMU_CTRL / 4] & 1);
+    if (u->mmu) {
+        memcpy(u->pt, ui + DP_H4P_UI_MMU_PT / 4, sizeof(u->pt));
+    } else {
+        memset(u->pt, 0, sizeof(u->pt));
+    }
     /* Size and placement. A full-panel layer (and the boot surface, which
      * leaves them 0) covers the panel at 0,0; 4.x CA also places partial
      * layers, e.g. an EAGL surface as an overlay under its UI. */
@@ -633,12 +694,12 @@ static size_t layer_fetch(S5L8930DisplayState *s, const UILayer *u, uint8_t *dst
     unsigned rows = u->y1 - u->y0;
 
     if (u->sh == rows && u->stride == row) {
-        fb_read(s, u->base, dst, row * rows);
+        fb_read(s, u, u->base, dst, row * rows);
         return row * rows;
     }
     for (unsigned y = u->y0; y < u->y1; y++) {
         unsigned sy = (unsigned)((uint64_t)(y - u->y0) * u->sh / rows);
-        fb_read(s, u->base + sy * u->stride, dst + (y - u->y0) * row, row);
+        fb_read(s, u, u->base + sy * u->stride, dst + (y - u->y0) * row, row);
     }
     return row * rows;
 }
@@ -664,7 +725,7 @@ static size_t layers_fetch(S5L8930DisplayState *s, const UILayer u[2], const boo
     return len;
 }
 
-/* One fetched row of a layer as XRGB/ARGB8888 (0 ARGB/BGRA, 2 ARGB4444, 4 RGB565). */
+/* One fetched row of a layer as XRGB/ARGB8888 (0 ARGB/BGRA, 2 ARGB4444, 3 ARGB1555 ('L555', H4P), 4 RGB565). */
 static void layer_row(uint32_t fmt, const uint8_t *src, unsigned w, uint32_t *d)
 {
     if (fmt == 0) {
@@ -673,14 +734,20 @@ static void layer_row(uint32_t fmt, const uint8_t *src, unsigned w, uint32_t *d)
     }
     for (unsigned x = 0; x < w; x++) {
         uint16_t v = lduw_le_p(src + x * 2);
-        d[x] = fmt == 2
-            ? ((uint32_t)(v & 0xf000) << 16 | (uint32_t)(v & 0xf000) << 12 |
-               (v & 0xf00) << 12 | (v & 0xf00) << 8 |
-               (v & 0x0f0) << 8 | (v & 0x0f0) << 4 |
-               (v & 0x00f) << 4 | (v & 0x00f))
-            : (0xff000000u | (v & 0xf800) << 8 | (v & 0xe000) << 3 |
-               (v & 0x07e0) << 5 | (v & 0x0600) >> 1 |
-               (v & 0x001f) << 3 | (v & 0x001c) >> 2);
+        if (fmt == 2) {
+            d[x] = (uint32_t)(v & 0xf000) << 16 | (uint32_t)(v & 0xf000) << 12 |
+                   (v & 0xf00) << 12 | (v & 0xf00) << 8 |
+                   (v & 0x0f0) << 8 | (v & 0x0f0) << 4 |
+                   (v & 0x00f) << 4 | (v & 0x00f);
+        } else if (fmt == 3) {
+            d[x] = ((v & 0x8000) ? 0xff000000u : 0) | (v & 0x7c00) << 9 | (v & 0x7000) << 4 |
+                   (v & 0x03e0) << 6 | (v & 0x0380) << 1 |
+                   (v & 0x001f) << 3 | (v & 0x001c) >> 2;
+        } else {
+            d[x] = 0xff000000u | (v & 0xf800) << 8 | (v & 0xe000) << 3 |
+                   (v & 0x07e0) << 5 | (v & 0x0600) >> 1 |
+                   (v & 0x001f) << 3 | (v & 0x001c) >> 2;
+        }
     }
 }
 
@@ -743,9 +810,9 @@ static bool video_compose(S5L8930DisplayState *s, unsigned w, unsigned h, uint32
     }
     g_autofree uint8_t *yp = g_malloc((size_t)sw * sh), *uvp = g_malloc((size_t)sw * sh / 2);
     for (unsigned y = 0; y < sh; y++) {
-        fb_read(s, r[0x307c / 4] + y * ys, yp + (size_t)y * sw, sw);
+        fb_read(s, NULL, r[0x307c / 4] + y * ys, yp + (size_t)y * sw, sw);
         if (!(y & 1)) {
-            fb_read(s, r[0x3080 / 4] + y / 2 * uvs, uvp + (size_t)y / 2 * sw, sw);
+            fb_read(s, NULL, r[0x3080 / 4] + y / 2 * uvs, uvp + (size_t)y / 2 * sw, sw);
         }
     }
     memset(out, 0, (size_t)w * h * 4);
@@ -839,10 +906,11 @@ static void front_latch(S5L8930DisplayState *s)
     size_t need;
 
     panel_size(s, &w, &h);
-    if (trace_event_get_state_backends(TRACE_S5L8930_DISPLAY_LOG)) {
+    /* The swaps' summaries (not the quiet relatches', which would use the budget up), bounded. */
+    if (s->pipe[0].swap_pending && trace_event_get_state_backends(TRACE_S5L8930_DISPLAY_LOG)) {
         static unsigned n;
         uint32_t *r = s->pipe[0].regs;
-        if (n++ < 200) {
+        if (n++ < 400) {
             TRACE_PRINTF(trace_s5l8930_display_log, "[disp] swap %u: layers=%08x %ux%u "
                     "(raw %08x/%08x) ui0=%08x ui1=%08x\n", s->pipe[0].swap_id,
                     r[DP_LAYERS / 4], w, h,
@@ -996,6 +1064,7 @@ static void s5l8930_display_reset(DeviceState *dev)
      * kernel adopts it from these registers, so without them there is no
      * console framebuffer. */
     r[DP_SIZE / 4] = s->width << 16 | s->height;
+    /* The H4P layer MMUs are off at reset: iBoot's framebuffer is a physical address. */
     /*
      * And the CLCD timing iBoot programs from its "k48" display-timing entry
      * (iBoot-931 5ff01e0e-5ff01eaa, table 5ff2b028: 1024x768, 68.4 MHz,
@@ -1026,7 +1095,13 @@ static void s5l8930_display_reset(DeviceState *dev)
          * mapping. SpringBoard died with SIGBUS (KERN_PROTECTION_FAILURE)
          * and never reached reboot2, so Hold -> slide never powered off. */
         r[(DP_UI_BASE(0) + DP_UI_STRIDE) / 4] = s->width * 4 | 2;
-        r[0x4060 / 4] = s->width << 16 | s->height;
+        if (s->gen == PIPE_GEN_H4P) {
+            /* AppleH4PDisplayPipe::start_hardware takes the size as 0x70 - 0x60 (origin 0,0). */
+            r[(DP_UI_BASE(0) + DP_H4P_UI_SRC_SIZE) / 4] = s->width << 16 | s->height;
+            r[(DP_UI_BASE(0) + DP_H4P_UI_DST_END) / 4] = s->width << 16 | s->height;
+        } else {
+            r[(DP_UI_BASE(0) + DP_UI_SRC_SIZE) / 4] = s->width << 16 | s->height;
+        }
     }
     pipes_update_irq(s);
     timer_mod(s->vbl, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + VBL_PERIOD_NS(s));
@@ -1038,6 +1113,10 @@ static void s5l8930_display_realize(DeviceState *dev, Error **errp)
 
     if (s->refresh_hz < 1 || s->refresh_hz > 240) {
         error_setg(errp, "refresh-hz must be 1 to 240, not %u", s->refresh_hz);
+        return;
+    }
+    if (s->gen != PIPE_GEN_H3 && s->gen != PIPE_GEN_H4P) {
+        error_setg(errp, "generation must be 3 (A4) or 4 (A5), not %u", s->gen);
         return;
     }
     s->vbl = timer_new_ns(QEMU_CLOCK_VIRTUAL, vbl_tick, s);
@@ -1098,6 +1177,8 @@ static void s5l8930_display_init(Object *obj)
     sysbus_init_irq(sbd, &s->pipe[0].irq);
     sysbus_init_irq(sbd, &s->clcd_irq);
     sysbus_init_irq(sbd, &s->pipe[1].irq);
+    s->pipe[0].index = 0;
+    s->pipe[1].index = 1;
     object_property_add_uint32_ptr(obj, "swaps", &s->swaps, OBJ_PROP_FLAG_READ);
     object_property_add_str(obj, "frame-timeline", s5l8930_get_frame_timeline, NULL);
     object_property_add_uint32_ptr(obj, "stop-after-vsyncs", &s->stop_after, OBJ_PROP_FLAG_READWRITE);
@@ -1196,6 +1277,9 @@ static const Property s5l8930_display_properties[] = {
     DEFINE_PROP_UINT32("panel-height", S5L8930DisplayState, ph, 0),
     /* Faster than the devices' 60 Hz on request (Light Touch's experimental 120 Hz), as ipod_touch_lcd's. */
     DEFINE_PROP_UINT32("refresh-hz", S5L8930DisplayState, refresh_hz, 60),
+    /* The pipe's generation: 3 = the A4's (AppleDisplayPipe), 4 = the A5's (AppleH4PDisplayPipe: the UI
+     * window at 0x50/0x60/0x70 and a layer MMU, DP_H4P_*). */
+    DEFINE_PROP_UINT8("generation", S5L8930DisplayState, gen, PIPE_GEN_H3),
 };
 
 static void s5l8930_display_class_init(ObjectClass *klass, const void *data)
