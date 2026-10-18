@@ -261,7 +261,13 @@ static void tmr_arm(S5L8940AICCpu *cpu, uint32_t load)
  * without writing a new TMR_CNT (its rtclock found nothing earlier to wait
  * for) and would wait forever on a one-shot timer, so the hardware
  * evidently keeps counting from the last value written.
+ * That reload is at least AIC_TMR_MIN_RELOAD: when the last count written was a deadline a few ticks
+ * away and the kernel acked without writing another, reloading it as is fired the FIQ every few
+ * ticks, about 100,000 a second of host time, and the CPU spent its time in the FIQ handler (the UI
+ * froze minutes into Setup Assistant). A count the kernel writes is still taken exactly.
  */
+#define AIC_TMR_MIN_RELOAD (AIC_TIMEBASE_HZ / 1000)
+
 static void tmr_expire(void *opaque)
 {
     S5L8940AICCpu *cpu = opaque;
@@ -269,7 +275,9 @@ static void tmr_expire(void *opaque)
     cpu->tmr_int_stat |= TMR_INT_FIRED;
     trace_s5l8940_aic_timer_fire(cpu->index);
     if (cpu->tmr_load) {
-        tmr_arm(cpu, cpu->tmr_load);
+        uint32_t load = MAX(cpu->tmr_load, AIC_TMR_MIN_RELOAD);
+
+        tmr_arm(cpu, load);
     }
     aic_update(cpu->aic);
 }

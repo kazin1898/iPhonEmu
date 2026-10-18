@@ -9,8 +9,11 @@ Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top le
   key NAME [--hold MS]           press a button: home, power, volup, voldown (the machine's keys:
                                  Home, End, Page Up, Page Down)
   shot OUT.png                   screendump of the panel, converted with Pillow
+  wake                           press Home if the panel is dark (Auto-Lock), then wait 3 s
   status | quit                  QMP query-status / quit (the logs flush on quit)
   wait SECS                      sleep on the host (to chain steps in one call)
+  keepalive [SECS [X Y]]         tap X Y (320 85, a navigation bar's title) every SECS (20) seconds, forever;
+                                 run it on the second QMP server (--port 4445); it pauses while another run is busy
 
 Several commands chain with ';' as one argument list: n94_input.py tap 320 800 \\; wait 2 \\; shot a.png
 The machine takes the pointer as an absolute device (0..32767 over the panel) on the left button;
@@ -103,6 +106,20 @@ def run(q, argv):
         finally:
             os.unlink(ppm)
         print(out)
+    elif op == "wake":
+        # iOS 6 locks after a minute without a touch (Auto-Lock's default) and a wake with no touch
+        # lasts ~10 s: press Home only when the panel is dark, so a lit app is not sent home.
+        from PIL import Image
+        fd, ppm = tempfile.mkstemp(suffix=".ppm")
+        os.close(fd)
+        try:
+            q.cmd("screendump", filename=ppm)
+            dark = Image.open(ppm).convert("L").getextrema()[1] == 0
+        finally:
+            os.unlink(ppm)
+        if dark:
+            run(q, ["key", "home"])
+            time.sleep(3)
     elif op == "status":
         print(q.cmd("query-status"))
     elif op == "quit":
@@ -128,10 +145,38 @@ def main():
         else:
             cur.append(a)
     steps.append(cur)
+    if steps[0][0] == "keepalive":
+        a = steps[0][1:]
+        keepalive(port, float(a[0]) if a else 20, a[1:3] if len(a) >= 3 else ["320", "85"])
+        return
     q = Qmp(port)
-    for st in steps:
-        if st:
-            run(q, st)
+    try:
+        for st in steps:
+            if st:
+                if st[0] == "wait":          # the keepalive may tap while we only wait
+                    if os.path.exists(BUSY):
+                        os.unlink(BUSY)
+                else:
+                    open(BUSY, "w").close()
+                run(q, st)
+    finally:
+        if os.path.exists(BUSY):
+            os.unlink(BUSY)
+
+
+BUSY = os.path.join(tempfile.gettempdir(), "n94_input.busy")
+
+
+def keepalive(port, every, at):
+    """Tap AT (a spot with no control: by default a navigation bar's title) every EVERY seconds on a
+    second QMP server, so Auto-Lock never darkens the panel between steps; skipped while another
+    n94_input.py run holds BUSY. Not the status bar: a tap there scrolls a list back to its top."""
+    q = Qmp(port)
+    while True:
+        time.sleep(every)
+        if os.path.exists(BUSY) and time.time() - os.path.getmtime(BUSY) < 600:
+            continue
+        run(q, ["tap", at[0], at[1], "--hold", "80"])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@
  *
  *   0x01-0x07  EVENT_A..G, read by the interrupt handler (7 bytes at once)
  *              and cleared by that read; EVENT_B bit 0x20 is "ADC done".
+ *   0x08-0x0d  STATUS_A..F: a USB host's cable (VBUS) and charging, see d1881_reset.
  *   0x0e-0x14  IRQ_MASK_A..G, 1 = masked (start writes ff 5f ff ff ...).
  *   0x43       ADC control: channel in [4:0], 0x20 starts a conversion (the
  *              driver also sets 0x40/0x80 for some channels), cleared after.
@@ -37,6 +38,13 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940D1881State, S5L8940_D1881)
 #define D1881_EVENT_COUNT   7
 #define D1881_IRQ_MASK_A    0x0e
 #define D1881_EVENT_B_ADC   0x20
+#define D1881_EVENT_A_VBUS  0x08        /* PMU interrupt 3: the power source re-reads the status */
+#define D1881_EVENT_A_USB   0x40
+#define D1881_STATUS_A      0x08        /* STATUS_A..F, read 6 at once */
+#define D1881_STATUS_A_VBUS     0x08
+#define D1881_STATUS_A_VBUS_RE  0x40    /* VBUS as a re-attach reads it */
+#define D1881_STATUS_B      0x09
+#define D1881_STATUS_B_CHARGING 0x02
 #define D1881_ADC_CTRL      0x43
 #define D1881_ADC_START     0x20
 #define D1881_ADC_RES_L     0x44
@@ -64,10 +72,36 @@ static void d1881_update_irq(S5L8940D1881State *s)
     qemu_set_irq(s->irq, pending);
 }
 
-/* A 12-bit reading per channel: mid-scale until the channels are identified. */
+/*
+ * A 12-bit reading per ADC mux (AppleD1881PMU's conversions, FUN_80aec9b0, the same scalings as the
+ * A4 boards' D1815): a phone at room temperature on a USB host's cable.
+ *   0, 4   vcc_main, vbat: mV = 2500 + raw * 2000 / 4096. The power source reads vbat once at boot
+ *          and looks it up in its battery-data curve (family 3: 4037 mV is ~80%); with no gas gauge
+ *          on uart5 that estimate is the level SpringBoard shows (mid-scale, 3500 mV, was ~2%, red).
+ *   6      the dock's D+/D- (otgphyctrl dmon_voltage): 0 V, a host's pull-downs; both lines above
+ *          1 V would make it a charger brick.
+ *   2, 7, 11-14  NTCs, 10 kOhm at 25 C behind a 50 uA source: 0x333.
+ *   8      tjunc, 26 C + 0.32 C * (0x425 - raw): 0x418 is 30 C.
+ *   15     vbus, V = raw * 88 / 65536: 5.0 V.
+ * Every other mux reads mid-scale.
+ */
 static uint16_t d1881_adc_sample(unsigned chan)
 {
-    return 0x800;
+    switch (chan) {
+    case 0:
+    case 4:
+        return 0xc4c;
+    case 6:
+        return 0;
+    case 2: case 7: case 11: case 12: case 13: case 14:
+        return 0x333;
+    case 8:
+        return 0x418;
+    case 15:
+        return 0xe8c;
+    default:
+        return 0x800;
+    }
 }
 
 static void d1881_adc_start(S5L8940D1881State *s, uint8_t ctrl)
@@ -140,6 +174,18 @@ static void d1881_reset(DeviceState *dev)
 
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->regs + D1881_IRQ_MASK_A, 0xff, D1881_EVENT_COUNT);
+    /*
+     * A USB host's cable on the dock connector, as a phone left on a computer. The power source
+     * (FUN_80aeff38) takes VBUS from STATUS_A bit 3 (bit 6 on a re-attach) and publishes it as
+     * AppleUSBCableDetect; with VBUS present and no charger-sleep-interval it keeps idle sleep off
+     * ("disabling idle sleep"), as on hardware. That matters here: the AP's hibernate ("pmu go hib")
+     * is not modeled, and a guest that slept after Auto-Lock never came back. STATUS_B 0x02 is
+     * charging. The cable's event (EVENT_A bit 3, and bit 6 the wake decoder calls "usb") is pending
+     * from power-on; the driver evaluates the port at start anyway.
+     */
+    s->regs[D1881_STATUS_A] = D1881_STATUS_A_VBUS | D1881_STATUS_A_VBUS_RE;
+    s->regs[D1881_STATUS_B] = D1881_STATUS_B_CHARGING;
+    s->regs[D1881_EVENT_A] = D1881_EVENT_A_VBUS | D1881_EVENT_A_USB;
     s->ptr = 0;
     s->ptr_set = false;
     s->rtc_latch = 0;
