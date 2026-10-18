@@ -422,8 +422,17 @@ Setup's welcome page cross-fades its languages and shimmers "slide to set up"):
 
 No gain yet worth the name: the two are within the run-to-run spread. The guest's single TCG core is the
 limit either way; the GL path moves the compositing to the GPU but adds a trap per GL call and a 640x960
-readback per frame into guest memory. Open: the home screen and an app on the bridge (Setup's Terms page
-needs the user's OK on a fresh unit), profiling where a GL frame's guest time goes, and the second core.
+readback per frame into guest memory.
+
+A clone of `runs/n94/nand` (the M4 unit's store, `E:/iphonemu-gl/devices/m4gl`, its `markers.json` pointed
+at the GL system volume and no install boot, which would rewrite `.GlobalPreferences.plist` and the data
+ark) boots on the bridge too, first screen at 198 and 363 s: that store had been left at Setup's language
+list, not the home screen, so the home screen and the stock apps on the bridge wait for a unit past Setup
+(the Terms page is the user's to accept; not done here). Setup in Portuguese drawn by the bridge:
+`2026-10-18_GL_setup-pais-pt.png`; a page transition (Voltar) caught mid-slide:
+`2026-10-18_GL_setup-transicao-pagina.png`, the whole slide in one intermediate frame (3 changed frames in
+8 s of sampling), against ~20 on the phone. Open: where a GL frame's guest time goes (the profiling session),
+the home screen and apps on the bridge, and the second core.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 
