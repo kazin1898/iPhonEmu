@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 59.7% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 61.8% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -101,13 +101,13 @@
 <rect x="422" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="443" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="464" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="485" y="303" width="18" height="16" rx="3" fill="#7bd389"/>
-<rect x="506" y="303" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="527" y="303" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="548" y="303" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="569" y="303" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="316" fill="#e6edf3" font-weight="600">55%</text>
-<text x="642" y="316" fill="#8b949e" font-size="12">A4 models at A5 addresses; the A5 clock table is still the A4 map</text>
+<rect x="485" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="303" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="316" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="316" fill="#8b949e" font-size="12">every boot access modeled (-d unimp shows none): the A5 PMGR&#x27;s perf, power and config registers, the watchdog at +0x3020 (a guest panic restarts the machine through &#x27;WDTr&#x27;), DWI, the PL310&#x27;s cif window, GPIO NPL, arm-io&#x27;s bus registers; the A5 clock table typed by the kext&#x27;s own slot names (real 4S values unknown)</text>
 <text x="36" y="342" fill="#e6edf3">PMU D1881, I2C, sensors</text>
 <rect x="380" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="329" width="18" height="16" rx="3" fill="#3fb950"/>

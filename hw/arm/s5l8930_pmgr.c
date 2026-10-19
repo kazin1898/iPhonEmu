@@ -72,12 +72,42 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8930PMGRState, S5L8930_PMGR)
 #define EVT_STATE_START     (1u << 0)
 #define EVT_STATE_UPDATE    (1u << 1)
 
-/* Watchdog; the names follow iBoot's rPMGR_WDOG_TMR/RST/INTR/CTL. */
-#define PMGR_WDOG_TMR       0x2020
-#define PMGR_WDOG_RST       0x2024
-#define PMGR_WDOG_INTR      0x2028
-#define PMGR_WDOG_CTL       0x202C
+/*
+ * Watchdog; the names follow iBoot's rPMGR_WDOG_TMR/RST/INTR/CTL. At +0x2020 on the A4, +0x3020 on the
+ * A5 (the "a5" property; DT wdt reg 0x3F103020), the same four registers, which the 10B329
+ * AppleS5L8930XWatchDogTimer drives as: arm = TMR <- 0, INTR <- RST / 2, RST <- 10 s of ticks, CTL <- 0xd;
+ * its interrupt (AIC 4) handler sets CTL bit 1 (acknowledge) and kicks; disarm = CTL <- 0; and the
+ * platform function 'WDTr', the kernel's way to restart the machine (a panic's restart among them),
+ * CTL |= 4, RST <- 0, TMR <- 0, then spins until the reset.
+ */
+#define WDOG_TMR            0x0
+#define WDOG_RST            0x4
+#define WDOG_INTR           0x8
+#define WDOG_CTL            0xc
+#define WDOG_CTL_IRQ_EN     (1u << 0)
+#define WDOG_CTL_IRQ        (1u << 1)       /* raised at INTR; write 1 to clear */
 #define WDOG_CTL_RESET_EN   (1u << 2)
+#define PMGR_WDOG_A4        0x2020
+#define PMGR_WDOG_A5        0x3020
+#define WDOG(s, r)          (((s)->a5 ? PMGR_WDOG_A5 : PMGR_WDOG_A4) + (r))
+
+/*
+ * The A5's PMGR registers the 10B329 AppleS5L8940XPerformanceController uses beyond the A4's ("a5"):
+ * CPU_PERF the CPU's performance state (written from cpu-clk-cfgs, then polled until bit 30 clears),
+ * PERF_STATE the SoC's (a byte, polled until [23:16] clear), PWR_REQ the power domains it brings up
+ * (bit 16 + n set in its mask, polled until the register shows none of them pending), and
+ * configuration words written at start (0x3c, 0x2108 <- 0x51, 0x3100-0x3108 from the DT).
+ */
+#define A5_CPU_PERF         0x38
+#define A5_CPU_PERF_BUSY    (1u << 30)
+#define A5_PERF_CFG         0x3c
+#define A5_PERF_STATE       0x300
+#define A5_PERF_STATE_BUSY  0x00ff0000u
+#define A5_PWR_STATE        0x2104
+#define A5_PWR_PENDING      0xffff0000u
+#define A5_PWR_CFG          0x2108
+#define A5_CFG_START        0x3100
+#define A5_CFG_END          0x310c
 
 #define PMGR_CLOCK_CON1     0x5030
 #define CLOCK_CON1_BUSY     (1u << 16)
@@ -110,6 +140,8 @@ struct S5L8930PMGRState {
     S5L8930EventTimer evt[2];
     QEMUTimer *wdog_timer;
     uint64_t wdog_start;
+    qemu_irq wdog_irq;
+    bool a5;                    /* "a5": the S5L8940X's watchdog address and registers */
 };
 
 /*
@@ -190,7 +222,11 @@ static bool pmgr_modeled(S5L8930PMGRState *s, hwaddr off)
            (off >= GATE_START && off < GATE_END(s)) ||
            off == PMGR_GATE_CTL ||
            (s->cores && off >= PMGR_GATE_CTL && off <= PMGR_CORE_RUN) ||
-           (off >= PMGR_TICKS_LO && off <= PMGR_WDOG_CTL) ||
+           (off >= PMGR_TICKS_LO && off <= PMGR_EVT_STATE(1)) ||
+           (off >= WDOG(s, WDOG_TMR) && off <= WDOG(s, WDOG_CTL)) ||
+           (s->a5 && (off == A5_CPU_PERF || off == A5_PERF_CFG || off == A5_PERF_STATE ||
+                      off == A5_PWR_STATE || off == A5_PWR_CFG ||
+                      (off >= A5_CFG_START && off < A5_CFG_END))) ||
            off == PMGR_CLOCK_CON1 || off == PMGR_POWER_ID;
 }
 
@@ -250,41 +286,67 @@ static void evt_write_state(S5L8930PMGRState *s, S5L8930EventTimer *t,
 }
 
 /* The watchdog shares the PMGR timebase. Keep the written count latched and
- * add elapsed ticks while reset is enabled. A comparison already satisfied
+ * add elapsed ticks while it is enabled (interrupt or reset). A comparison already satisfied
  * requests the immediate reset used by WDTr; a future comparison needs a
  * virtual deadline even if the guest never accesses PMGR again. */
+static bool wdog_counting(S5L8930PMGRState *s)
+{
+    return s->regs[WDOG(s, WDOG_CTL) / 4] & (WDOG_CTL_RESET_EN | WDOG_CTL_IRQ_EN);
+}
+
 static uint32_t wdog_count(S5L8930PMGRState *s)
 {
-    uint32_t count = s->regs[PMGR_WDOG_TMR / 4];
-    if (s->regs[PMGR_WDOG_CTL / 4] & WDOG_CTL_RESET_EN) {
+    uint32_t count = s->regs[WDOG(s, WDOG_TMR) / 4];
+    if (wdog_counting(s)) {
         uint64_t elapsed = pmgr_ticks(s) - s->wdog_start;
         return MIN((uint64_t)count + elapsed, UINT32_MAX);
     }
     return count;
 }
 
-static void wdog_expire(void *opaque)
+static void wdog_update_irq(S5L8930PMGRState *s)
 {
-    S5L8930PMGRState *s = opaque;
-    if (s->regs[PMGR_WDOG_CTL / 4] & WDOG_CTL_RESET_EN) {
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
-    }
+    uint32_t ctl = s->regs[WDOG(s, WDOG_CTL) / 4];
+
+    qemu_set_irq(s->wdog_irq, (ctl & WDOG_CTL_IRQ) && (ctl & WDOG_CTL_IRQ_EN));
 }
 
 static void wdog_check(S5L8930PMGRState *s)
 {
+    uint32_t *ctl = &s->regs[WDOG(s, WDOG_CTL) / 4];
+    uint32_t count = wdog_count(s);
+    uint64_t next = UINT64_MAX;
+
     timer_del(s->wdog_timer);
-    if (s->regs[PMGR_WDOG_CTL / 4] & WDOG_CTL_RESET_EN) {
-        uint32_t count = wdog_count(s);
-        uint32_t limit = s->regs[PMGR_WDOG_RST / 4];
-        if (count >= limit) {
-            wdog_expire(s);
+    if ((*ctl & WDOG_CTL_IRQ_EN) && !(*ctl & WDOG_CTL_IRQ)) {
+        uint32_t intr = s->regs[WDOG(s, WDOG_INTR) / 4];
+
+        if (count >= intr) {
+            *ctl |= WDOG_CTL_IRQ;
         } else {
-            timer_mod(s->wdog_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      1 + muldiv64(limit - count, NANOSECONDS_PER_SECOND,
-                                   PMGR_TIMEBASE_HZ));
+            next = intr - count;
         }
     }
+    wdog_update_irq(s);
+    if (*ctl & WDOG_CTL_RESET_EN) {
+        uint32_t limit = s->regs[WDOG(s, WDOG_RST) / 4];
+
+        if (count >= limit) {
+            trace_s5l8930_pmgr_wdog_reset(count, limit);
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            return;
+        }
+        next = MIN(next, limit - count);
+    }
+    if (next != UINT64_MAX) {
+        timer_mod(s->wdog_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1 +
+                  muldiv64(next, NANOSECONDS_PER_SECOND, PMGR_TIMEBASE_HZ));
+    }
+}
+
+static void wdog_expire(void *opaque)
+{
+    wdog_check(opaque);
 }
 
 static uint64_t s5l8930_pmgr_read(void *opaque, hwaddr off, unsigned size)
@@ -298,9 +360,21 @@ static uint64_t s5l8930_pmgr_read(void *opaque, hwaddr off, unsigned size)
         return val;
     }
 
-    switch (off) {
-    case PMGR_WDOG_TMR:
+    if (off == WDOG(s, WDOG_TMR)) {
         return wdog_count(s);
+    }
+    if (s->a5) {
+        switch (off) {
+        case A5_CPU_PERF:
+            return val & ~A5_CPU_PERF_BUSY;
+        case A5_PERF_STATE:
+            return val & ~A5_PERF_STATE_BUSY;
+        case A5_PWR_STATE:
+            return val & ~A5_PWR_PENDING;
+        }
+    }
+
+    switch (off) {
     /* The kernel reads HI, LO, HI and retries on a mismatch, so both halves
      * can be sampled live. */
     case PMGR_TICKS_LO:
@@ -381,11 +455,17 @@ static void s5l8930_pmgr_write(void *opaque, hwaddr off, uint64_t val64,
         }
         s->regs[off / 4] = val;
         return;
-    case PMGR_WDOG_TMR:
-    case PMGR_WDOG_RST:
-    case PMGR_WDOG_CTL:
-        s->regs[PMGR_WDOG_TMR / 4] = wdog_count(s);
+    }
+    if (off >= WDOG(s, WDOG_TMR) && off <= WDOG(s, WDOG_CTL)) {
+        trace_s5l8930_pmgr_wdog(off - WDOG(s, WDOG_TMR), val);
+        s->regs[WDOG(s, WDOG_TMR) / 4] = wdog_count(s);
         s->wdog_start = pmgr_ticks(s);
+        if (off == WDOG(s, WDOG_CTL)) {
+            /* bit 1 is the interrupt's status: writing 1 clears it */
+            uint32_t irq = s->regs[off / 4] & WDOG_CTL_IRQ & ~val;
+
+            val = (val & ~WDOG_CTL_IRQ) | irq;
+        }
         s->regs[off / 4] = val;
         wdog_check(s);
         return;
@@ -445,6 +525,7 @@ static void s5l8930_pmgr_reset(DeviceState *dev)
 
     timer_del(s->wdog_timer);
     s->wdog_start = 0;
+    qemu_irq_lower(s->wdog_irq);
     s->core_on = 1;             /* the machine's reset leaves the other cores off */
     /*
      * The 24 MHz timebase keeps counting across the AP's hibernate: xnu's
@@ -492,6 +573,9 @@ static void s5l8930_pmgr_init(Object *obj)
     qdev_init_gpio_out_named(DEVICE(obj), s->core_enable, "core-enable", PMGR_MAX_CORES);
     for (i = 0; i < ARRAY_SIZE(s->evt); i++) {
         sysbus_init_irq(sbd, &s->evt[i].irq);
+    }
+    sysbus_init_irq(sbd, &s->wdog_irq);          /* sysbus IRQ 2: the watchdog's interrupt */
+    for (i = 0; i < ARRAY_SIZE(s->evt); i++) {
         s->evt[i].timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, evt_expire,
                                        &s->evt[i]);
     }
@@ -557,6 +641,7 @@ static const Property s5l8930_pmgr_props[] = {
     DEFINE_PROP_UINT32("gates", S5L8930PMGRState, gates, 0x40),
     DEFINE_PROP_BOOL("clkcfg-hi", S5L8930PMGRState, clkcfg_hi, false),
     DEFINE_PROP_UINT32("cores", S5L8930PMGRState, cores, 0),
+    DEFINE_PROP_BOOL("a5", S5L8930PMGRState, a5, false),
 };
 
 static void s5l8930_pmgr_class_init(ObjectClass *klass, const void *data)

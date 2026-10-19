@@ -20,7 +20,7 @@ Kernel: `Darwin Kernel Version 13.0.0 ... root:xnu-2107.7.55.2.2~1/RELEASE_ARM_S
 | SRAM / boot ROM | not in the DT | not needed for kboot. |
 | Timebase | 24 MHz | `timebase-frequency`, `fixed-frequency` on cpu0 (iBoot-filled). |
 | Timers | the AIC's per-CPU timer and 64-bit counter (below) | the PMGR is still `device_type timer` (its node is what `pe_arm_init_timer` maps) but the 10B329 kernel's rtclock never touches the A4 event timers at PMGR+0x2000: mach_absolute_time is AIC TIME_LO/HI and the deadline the AIC TMR_CNT, acked on FIQ. |
-| Watchdog | 0x3F103020+0x10, AIC 4 | `wdt,s5l8940x|s5l8930x|s5l8920x` **A4** (inside the PMGR window). |
+| Watchdog | 0x3F103020+0x10, AIC 4 | `wdt,s5l8940x|s5l8930x|s5l8920x`: the A4 block at the A5's offset (the PMGR model's `a5`), driven by `AppleS5L8930XWatchDogTimer`; "Platform" below. |
 
 `arm-io` ranges: child 0x0 -> parent 0x30000000, size 0x10000000. Every `reg` below is absolute.
 The A4's peripheral windows at 0x8xxxxxxx and 0xBFxxxxxx reappear at 0x3xxxxxxx and 0x3Fxxxxxx
@@ -113,8 +113,8 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
 
 | Node | reg | AIC | compatible | Model |
 |---|---|---|---|---|
-| pmgr | 0x3F100000+0x7000; 0x38C00000, 0x38D00000, 0x38E00000, 0x38F00000, 0x3A500000, 0x3A600000 (+0x1000 each) | | `pmgr,s5l8940x` | **A4** `s5l8930_pmgr.c` with `gates` 0x78 (the A5 polls gate 0x44 at 0x1120 and pulses 0x5c; the A4 model's 0x40 gates read as zero there and the kernel spun forever) and `clkcfg-hi` (a second clock-config bank at 0x200-0x300 with the same busy bit). Still unmodeled: 0x38/0x3c, 0x1204, 0x2104/0x2108, 0x3100-0x3108. |
-| dwi | 0x3F700000, AIC 6 | 6 | `dwi,s5l8940x` | **new** (`AppleS5L8940XDWI`): single-wire PMU buck control; the A4's SWI (0xBF600000) plays the same role. |
+| pmgr | 0x3F100000+0x7000; 0x38C00000, 0x38D00000, 0x38E00000, 0x38F00000, 0x3A500000, 0x3A600000 (+0x1000 each) | | `pmgr,s5l8940x` | **A4** `s5l8930_pmgr.c` with `gates` 0x78 (the A5 polls gate 0x44 at 0x1120 and pulses 0x5c; the A4 model's 0x40 gates read as zero there and the kernel spun forever) and `clkcfg-hi` (a second clock-config bank at 0x200-0x300 with the same busy bit); `cores` and `a5` add the A5's core control, performance and power registers and the watchdog's address ("SMP", "Platform"). |
+| dwi | 0x3F700000, AIC 6 | 6 | `dwi,s5l8940x` | `AppleS5L8940XDWI`: single-wire PMU buck control (the A4's SWI at 0xBF600000 plays the same role); a register file in `n94.c` ("Platform"). |
 | iop | 0x3F300000 | 2 | `iop,s5l8940x`, `iop-version 1` | **new**: `AppleA5IOP` + `EmbeddedIOP-47.3` run `IOP_s5l8940xiop_firmware` (EmbeddedIOP iBoot-1537.9.55, 0x29000 bytes, Thumb-2). Not the A4 block: the control registers, the doorbells (AIC `IPID` functions) and the firmware's own use of the AIC are in "The IOP" below. A4 IOP is 0x86300000 + VICs at 0xBF300000. |
 | ae2 | 0x341E0000, 0x341E1000, 0x341A0000, 0x341C1000, 0x34000000+0x30000 | 97, 98 | `ae2,s5l8940x` | **new** `s5l8940_ae2.c` (high-level, M3): audio engine (`AppleA5AE2`, `IOP_s5l8940xae2_firmware`); section "The AE2". |
 | cdma | 0x37000000+0x2D000, 0x37800000+0x9000 (AES) | 51..94 | `cdma-version 3`, `max-channel 44` | **A4** `s5l8930_cdma.c` at the A5 bases (`dram-base`, `uart-base`, `paced-base` properties): channel n interrupts at 50+n; the model's 38 channels leave 39..44 in the unimplemented window. Its AES filter is what `CDMAAES`/`IOAESAccelerator` drive. |
@@ -662,6 +662,50 @@ does to start cpu1, as traced and decoded:
   `hw.activecpu: 2`, `hw.physicalcpu: 2`, `hw.logicalcpu_max: 2`); the kernel has no `machine_info`
   symbol, so the tool takes its address from `host_info`'s literal pool (0x802d01a8 in 10B329).
 
+## Platform: PMGR, watchdog, DWI, PL310, GPIO, the clock table (2026-10-19)
+
+Every access the kernel makes to these blocks during a boot (to Setup and two minutes past it, two cores)
+is now modeled: `-d unimp` shows none of them (what is left there is the JPEG, scaler, ISP, usb-complex
+and i2s-switch blocks). Decoded from the 10B329 kexts (Ghidra):
+
+- **PMGR** (`AppleS5L8940XPerformanceController`, AppleS5L8940X kext 0x808fc8f0): beyond the A4's PLLs,
+  clock configs and gates, the model's `a5` property adds `0x38` (the CPU's performance state: written
+  from `cpu-clk-cfgs`, polled until bit 30 clears), `0x300` (the SoC's: a byte, polled until `[23:16]`
+  clear), `0x2104` (power domains: the kext sets bit 16 + n in its mask and polls until the register shows
+  none of them pending, so `[31:16]` read 0), and configuration words written at start (`0x3c`, `0x2108`
+  <- 0x51, `0x3100`-`0x3108` from the DT). `0x1200`/`0x1204` are the core control ("SMP"; `0x1204` <- 2 or 4
+  also comes from a per-domain on/off path, 0x808fe578).
+- **Watchdog** (`AppleS5L8930XWatchDogTimer`, the A4 kext, matched by `wdt,s5l8930x`): the A4's four
+  registers at PMGR + 0x3020 (TMR, RST, INTR, CTL). Arming is TMR <- 0, INTR <- RST / 2, RST <- 10 s of
+  ticks (`_wdtResetCount=0xe4e1c00`), CTL <- 0xd; the interrupt (AIC 4) handler sets CTL bit 1 and kicks;
+  CTL <- 0 disarms. The kernel restarts the machine through it: the platform function `'WDTr'` writes CTL
+  |= 4, RST <- 0, TMR <- 0 and spins. The model counts while CTL bit 0 or 2 is set, raises the interrupt
+  at INTR (bit 1, write 1 to clear) and resets the machine at RST. Checked: a `panic()` injected over the
+  gdbstub (pc = `_panic`) on a bundle without `debug=` (the default boot-args' `debug=0x8` makes a panic
+  wait for a debugger instead) ends in `'WDTr'` (`-trace s5l8930_pmgr_wdog*`: `wdt +0xc <- 0x4`, `wdt
+  reset: count 0 limit 0`) and the machine boots again to `BSD root`. Before, the same write fell into the
+  PMGR's unmodeled registers and a panicking guest hung.
+- **DWI** (`AppleS5L8940XDWI`, "using DWI for BUCK changes"): three channels with their control word at
+  `+0x10`, `+0x20`, `+0x40` (0x71 starts a transfer; bit 0 busy, polled with a deadline and a panic) and
+  data at `+0x14`, `+0x24`/`+0x30`, `+0x44`; `+0x00`, `+0x04`, `+0x50` timing. A register file whose busy
+  bits read clear; the buck voltages are not passed to the PMU model.
+- **PL310**: QEMU's `l2x0` for the controller, and its second window (`pl310` reg[1], 0x3FD00000,
+  `AppleS5L8940XPL310`'s "cif": `0x1020` <- 1, `0x1120` <- 0x80000100) as a register file.
+- **GPIO**: `0xc48` is the NPL mode word, which `AppleS5L8930XGPIOIC::start` sets to 1 unless the node has
+  `no-npl-mode` (the A5's has not); kept and read back.
+- **arm-io's own registers** (0x3FB00000 and 0x3FC00000, `AppleS5L8940XIO`): bus timeout (`+0x04` <- the
+  DT's `bus-timeout`, then 0x01000000) and PIO error reporting (`+0x18` <- 1, `+0x1c` <- 3); register
+  files that never latch an error.
+- **The clock table.** A node's `clock-ids` entry 0x100 + n is slot n of `/arm-io/clock-frequencies`, the
+  64 words iBoot fills. `AppleS5L8940XIO::start` types each slot itself (a table of four names per slot at
+  0x809014d0): `nclk` 30 and 50-54, `hclk` 31, 33, 36-44 and 63, `pclk` 45-49. In the DT, i2c uses 30,
+  mipi-dsim 32, ae2 33, usb-complex 36, clcd/rgbout/tv-out 38, iop 43, pl310 44, flash 46-47, uart and spi1
+  48 (spi1's function clock 51), pke 49, vxd 62-63; ids under 0x100 (0x4 for wdt and uart, 0x5 for the
+  OTG PHY) are not table slots, and the watchdog checks that its clock equals the timebase (it does).
+  `ios-prep` writes 24 MHz to slot 0 (the oscillator) and the `nclk` slots, the bus clock (200 MHz) to the
+  `hclk` ones and the peripheral clock (100 MHz) elsewhere. The real 4S values come from iBoot's PLL setup
+  and are not known here (no public ioreg dump was found); nothing the models do depends on them.
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
@@ -741,13 +785,11 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
    which core the hardware hands a vector targeting both (the model: the first IACK claims it, "SMP"),
    and what the kernel expects of an IPI it sends itself (0x2008 <- 0x80000000 while the IPI vector is
    still masked; with the clock running it moves on). cpu1's timer FIQ is wired since the SMP work.
-2. **PMGR timer / clock table**: the A5's `clock-frequencies` index map; `ios-prep` writes the A4 map. The
-   A5 PMGR has registers the A4 model does not know and the kernel reads back as zero without complaint so
-   far: clock configs 0x220-0x254 and 0x2f0-0x2f8, 0x3c, gates 0x1110-0x115c and 0x1180, 0x1204, 0x2108
-   (<- 0x51), 0x3100-0x3108. The wdt at +0x3020 (A4: +0x2020) has not been touched by 10B329 yet.
+2. ~~**PMGR timer / clock table**~~: done 2026-10-19 ("Platform"). Open: the 4S's real clock values (the
+   slots' kinds are the kext's; the frequencies are plausible stand-ins).
 3. **Unmodeled blocks the kernel writes at boot** (reads come back 0, nothing complains): CDMA 0x37000008
    and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000, i2s-switch 0x3FA01000-0x3FA0103C
-   (all 0), the PL310 "cif" window 0x3FD01020 (<- 1) and 0x3FD01120 (<- 0x80000100). `AppleH4CamIn::start`
+   (all 0). (The PL310 "cif" window, the DWI and arm-io's registers are modeled since 2026-10-19.) `AppleH4CamIn::start`
    (isp) and `AppleSamsungDPTXControllerS5L8940X` start without faulting on the unimplemented window.
 4. **PMU**: `hw/arm/s5l8940_d1881.c` models what AppleD1881PMU (text 0x80aea268, decompiled with the
    Ghidra project) is seen to use: EVENT_A..G at 0x01-0x07 (read 7 at once by the interrupt handler,

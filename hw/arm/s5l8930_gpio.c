@@ -47,6 +47,11 @@
 #define GPIO_INT_ENABLE     0x840
 #define GPIO_INT_STATUS     0x880
 #define GPIO_INT_SUMMARY    0xc00
+/*
+ * The NPL mode word: AppleS5L8930XGPIOIC::start writes 1 here unless the gpio node has
+ * "no-npl-mode" (the A5's has not). A configuration bit the model keeps and reads back.
+ */
+#define GPIO_NPL            0xc48
 
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8930GPIOState, S5L8930_GPIO)
 
@@ -64,6 +69,7 @@ struct S5L8930GPIOState {
     uint32_t rest_low[GPIO_GROUPS];   /* inputs a reset leaves low: switches the board holds there */
     uint32_t enabled[GPIO_GROUPS];
     uint32_t status[GPIO_GROUPS];
+    uint32_t npl;                     /* GPIO_NPL */
 };
 
 static bool pin_input(S5L8930GPIOState *s, unsigned pin)
@@ -131,6 +137,9 @@ static uint64_t s5l8930_gpio_read(void *opaque, hwaddr addr, unsigned size)
         bool level = (mode == GPIO_MODE_OUT || mode == GPIO_MODE_OUT_ALT) ?
                      s->cfg[pin] & GPIO_CFG_DATA : pin_input(s, pin);
         return (s->cfg[pin] & ~GPIO_CFG_DATA) | level;
+    }
+    if (addr == GPIO_NPL) {
+        return s->npl;
     }
     if (addr == GPIO_INT_SUMMARY) {
         uint32_t summary = 0;
@@ -240,6 +249,10 @@ static void s5l8930_gpio_write(void *opaque, hwaddr addr, uint64_t value,
             return;
         }
     }
+    if (addr == GPIO_NPL) {
+        s->npl = value;
+        return;
+    }
     qemu_log_mask(LOG_UNIMP, "%s: unimplemented write @ 0x%" HWADDR_PRIx
                   " value 0x%" PRIx64 "\n", __func__, addr, value);
 }
@@ -296,6 +309,7 @@ static void s5l8930_gpio_reset(DeviceState *dev)
     for (unsigned pin = 0; pin < s->ports * 8; pin++) {
         s->cfg[pin] = 0x200;
     }
+    s->npl = 0;
     memset(s->input, 0xff, sizeof(s->input));
     /* SecureROM samples these straps to construct POWER_ID. The board/revision
      * match the real K48's 0x01020001; all-high inputs selected an unsupported
@@ -348,6 +362,22 @@ static const VMStateDescription vmstate_s5l8930_gpio_wide = {
     }
 };
 
+static bool gpio_npl_needed(void *opaque)
+{
+    return ((S5L8930GPIOState *)opaque)->npl != 0;
+}
+
+static const VMStateDescription vmstate_s5l8930_gpio_npl = {
+    .name = "s5l8930_gpio/npl",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = gpio_npl_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(npl, S5L8930GPIOState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_s5l8930_gpio = {
     .name = "s5l8930_gpio",
     .version_id = 1,
@@ -361,6 +391,7 @@ static const VMStateDescription vmstate_s5l8930_gpio = {
     },
     .subsections = (const VMStateDescription * const []) {
         &vmstate_s5l8930_gpio_wide,
+        &vmstate_s5l8930_gpio_npl,
         NULL
     }
 };

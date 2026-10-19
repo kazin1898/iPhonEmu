@@ -54,9 +54,9 @@
         },
         {
           "name": "PMGR clocks, GPIO, DWI, watchdog, PL310",
-          "percent": 55,
+          "percent": 100,
           "weight": 3,
-          "note": "A4 models at A5 addresses; the A5 clock table is still the A4 map"
+          "note": "every boot access modeled (-d unimp shows none): the A5 PMGR's perf, power and config registers, the watchdog at +0x3020 (a guest panic restarts the machine through 'WDTr'), DWI, the PL310's cif window, GPIO NPL, arm-io's bus registers; the A5 clock table typed by the kext's own slot names (real 4S values unknown)"
         },
         {
           "name": "PMU D1881, I2C, sensors",

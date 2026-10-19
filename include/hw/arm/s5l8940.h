@@ -27,6 +27,8 @@
 #define S5L8940_PMGR_SIZE        0x8000
 #define S5L8940_AIC_BASE         0x3f200000   /* aic,1 */
 #define S5L8940_AIC_SIZE         0x10000
+#define S5L8940_ARMIO_BASE(n)    (0x3fb00000 + (n) * 0x100000)   /* arm-io reg: the fabrics' bus timeout, PIO errors */
+#define S5L8940_DWI_BASE         0x3f700000   /* dwi,s5l8940x: the PMU bucks over a single wire */
 #define S5L8940_GPIO_BASE        0x3fa00000   /* gpio,s5l8940x: 28 ports, 8 interrupt groups */
 #define S5L8940_GPIO_SIZE        0x1000
 #define S5L8940_GPIO_PORTS       0x1c

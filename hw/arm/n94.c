@@ -67,6 +67,7 @@ struct N94MachineState {
     synopsys_usb_state *usb_otg;
     MemoryRegion sac;                    /* the panel's adaptive clocking block (n94_sac_ops) */
     uint32_t sac_regs[0x40];
+    struct N94RegFile *dwi, *pl310_cif, *armio[2];
     IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
     bool kbd_cmd, kbd_shift;
     int kbd_btn_held[Q_KEY_CODE__MAX];   /* qcode -> 1 + button pin */
@@ -349,6 +350,66 @@ static void n94_sac_write(void *opaque, hwaddr addr, uint64_t val, unsigned size
     regs[addr >> 2] = val;
 }
 
+/*
+ * Blocks the kernel only configures, as register files that read back what was written, with
+ * the bits a driver polls for "done" reading clear (the operation is over at once):
+ *
+ * - dwi (0x3F700000, dwi,s5l8940x; AppleS5L8940XDWI, the D1881's buck control by single-wire
+ *   interface, "using DWI for BUCK changes"): three channels with their control word at +0x10,
+ *   +0x20 and +0x40 (0x71 starts a transfer, bit 0 busy, polled with a deadline and a panic) and
+ *   their data at +0x14, +0x24/+0x30 and +0x44; +0x00, +0x04 and +0x50 are timing set at start.
+ *   The model does not forward the buck settings to the PMU.
+ * - The PL310's second window (pl310 reg[1], 0x3FD00000, 0x2000: AppleS5L8940XPL310's "cif"):
+ *   0x1020 <- 1 and 0x1120 <- 0x80000100 at start.
+ * - arm-io's own reg (0x3FB00000 and 0x3FC00000, 0x1000 each; AppleS5L8940XIO): the two fabrics'
+ *   bus timeout (+0x04 <- the DT's bus-timeout 0x7fffff, then 0x01000000) and PIO error reporting
+ *   (+0x18 <- 1, +0x1c <- 3); no error is ever latched.
+ */
+typedef struct N94RegFile {
+    MemoryRegion mr;
+    uint32_t done_mask[6];               /* {offset, bits that read 0} pairs, offset 0 ends */
+    uint32_t regs[];
+} N94RegFile;
+
+static uint64_t n94_regfile_read(void *opaque, hwaddr addr, unsigned size)
+{
+    N94RegFile *r = opaque;
+    uint32_t val = r->regs[addr >> 2];
+
+    for (unsigned i = 0; i + 1 < ARRAY_SIZE(r->done_mask) && r->done_mask[i]; i += 2) {
+        if (addr == r->done_mask[i]) {
+            val &= ~r->done_mask[i + 1];
+        }
+    }
+    return val;
+}
+
+static void n94_regfile_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+{
+    N94RegFile *r = opaque;
+
+    r->regs[addr >> 2] = val;
+}
+
+static const MemoryRegionOps n94_regfile_ops = {
+    .read = n94_regfile_read,
+    .write = n94_regfile_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
+static N94RegFile *n94_regfile(N94MachineState *s, const char *name, hwaddr base, uint32_t size,
+                               const uint32_t *done, unsigned ndone)
+{
+    N94RegFile *r = g_malloc0(sizeof(*r) + size);
+
+    memcpy(r->done_mask, done, MIN(ndone, ARRAY_SIZE(r->done_mask)) * sizeof(uint32_t));
+    memory_region_init_io(&r->mr, OBJECT(s), &n94_regfile_ops, r, name, size);
+    memory_region_add_subregion(get_system_memory(), base, &r->mr);
+    return r;
+}
+
 static const MemoryRegionOps n94_sac_ops = {
     .read = n94_sac_read,
     .write = n94_sac_write,
@@ -503,8 +564,16 @@ static void n94_init(MachineState *machine)
      */
     create_unimplemented_device("s5l8940.periph", S5L8940_PERIPH_BASE, S5L8940_PERIPH_SIZE);
 
-    /* The L2C-310 the kernel's platform_cache function sets up. */
+    /* The L2C-310 the kernel's platform_cache function sets up, and its second window. */
     sysbus_create_simple("l2x0", S5L8940_PL310_BASE, NULL);
+    s->pl310_cif = n94_regfile(s, "n94.pl310-cif", S5L8940_PL310_AUX_BASE, 0x2000, NULL, 0);
+    s->armio[0] = n94_regfile(s, "n94.arm-io0", S5L8940_ARMIO_BASE(0), 0x1000, NULL, 0);
+    s->armio[1] = n94_regfile(s, "n94.arm-io1", S5L8940_ARMIO_BASE(1), 0x1000, NULL, 0);
+    {
+        static const uint32_t dwi_done[] = { 0x10, 1, 0x20, 1, 0x40, 1 };
+
+        s->dwi = n94_regfile(s, "n94.dwi", S5L8940_DWI_BASE, 0x1000, dwi_done, ARRAY_SIZE(dwi_done));
+    }
 
     dev = qdev_new(TYPE_S5L8940_AIC);
     s->aic = dev;
@@ -530,8 +599,10 @@ static void n94_init(MachineState *machine)
     qdev_prop_set_uint32(dev, "gates", 0x78);       /* the kernel polls gate 0x44 and pulses 0x5c */
     qdev_prop_set_bit(dev, "clkcfg-hi", true);      /* clock configs at 0x200-0x300 too */
     qdev_prop_set_uint32(dev, "cores", N94_MAX_CPUS);
+    qdev_prop_set_bit(dev, "a5", true);             /* the A5's watchdog (+0x3020) and registers */
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_PMGR_BASE);
+    sysbus_connect_irq(sbd, 2, n94_irq(s, S5L8940_IRQ_WDT));
     for (i = 0; i < N94_MAX_CPUS; i++) {
         qdev_connect_gpio_out_named(dev, "core-enable", i,
                                     qemu_allocate_irq(n94_core_enable, s, i));

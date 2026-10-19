@@ -68,11 +68,24 @@ class Board:
         return self.phys_base + self.dram - PRAM_SIZE
 
     def clock_table(self, slots):
-        """/arm-io/clock-frequencies: the A4 index map (0 timebase, 5 cpu, 6 periph, 27 mem, 32 bus,
-        33 fixed), everything else the peripheral clock. The A5's own table is a bring-up item."""
+        """/arm-io/clock-frequencies, the table iBoot fills and a device node's clock-ids (0x100 + slot)
+        index. The A4 index map: 0 timebase, 5 cpu, 6 periph, 27 mem, 32 bus, 33 fixed, everything else
+        the peripheral clock. The A5's (S5L8940X) slots are typed by AppleS5L8940XIO itself, which names
+        each slot it publishes (a table of four names per slot, 10B329 0x809014d0): "nclk" 30 and 50-54,
+        "hclk" 31, 33, 36-44 and 63, "pclk" 45-49 (hclk+pclk on 31, 33 and 45-49). The 4S's real values
+        come from iBoot's PLL setup and are not known here: slot 0 (the oscillator) and the nclk slots get
+        the 24 MHz reference, the hclk slots the bus clock, the rest the peripheral clock. Users in the DT:
+        i2c 30, mipi-dsim 32, ae2 33, usb-complex 36, clcd/rgbout/tv-out 38, iop 43, pl310 44, flash 46-47,
+        uart/spi1 48 (spi1's function clock 51), pke 49."""
         c = [self.periph_hz] * slots
-        for i, hz in {0: self.timebase_hz, 5: self.cpu_hz, 6: self.periph_hz, 27: self.mem_hz,
-                      32: self.bus_hz, 33: self.fixed_hz}.items():
+        if self.platform == "s5l8940x":
+            table = {0: self.fixed_hz}
+            table.update({i: self.fixed_hz for i in (30, 50, 51, 52, 53, 54)})
+            table.update({i: self.bus_hz for i in (31, 33, 36, 37, 38, 39, 40, 41, 42, 43, 44, 63)})
+        else:
+            table = {0: self.timebase_hz, 5: self.cpu_hz, 6: self.periph_hz, 27: self.mem_hz,
+                     32: self.bus_hz, 33: self.fixed_hz}
+        for i, hz in table.items():
             if i < slots:
                 c[i] = hz
         return c
