@@ -19,9 +19,9 @@
         },
         {
           "name": "Boot to launchd (userland)",
-          "percent": 95,
+          "percent": 100,
           "weight": 5,
-          "note": "M2/M3: launchd, every daemon, SpringBoard; first boot to Setup 115 s, normal boot to the lock screen 70 s; console errors all from unmodeled blocks or radios; open: assistantd killed every boot by mediaserverd's AudioSessionSetProperty timeout (the AE2 audio engine never starts)"
+          "note": "M2/M3: launchd, every daemon, SpringBoard; first boot to Setup 115 s, normal boot to the lock screen 70 s; no daemon crash: assistantd's kill at boot was AudioToolbox's 5 s session timeout against the emulator's pace (60 s, a per-firmware edit); console errors only from unmodeled blocks and radios"
         },
         {
           "name": "Storage: IOP, PPN NAND, FTL, NVRAM",

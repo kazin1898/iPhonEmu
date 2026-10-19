@@ -72,6 +72,9 @@ is not opened for writing:
 - lockdownd's activation short-circuit ("Activation" below; `--stock-lockdownd` leaves it out).
 - The M3 launchd edits, `sysvol.UNIT_EDITS` (`--stock-jobs` leaves them out): `CA_ENABLE_OGL=0` for
   backboardd and SpringBoard, and BTServer and BlueTool disabled.
+- AudioToolbox's audio-session timeout in the shared cache, 5 s to 60 s (`sysvol.audio_session_timeout`,
+  also left out by `--stock-jobs`): at the emulator's pace mediaserverd is not ready in 5 s at boot and
+  assistantd killed itself on every boot (hardware.md "Boot: what a normal boot logs").
 
 ## Virtual devices: IPSW to a usable unit in one command
 

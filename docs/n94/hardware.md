@@ -551,7 +551,10 @@ open the next boot with "unclean shutdown".
 
 Times (16 GiB units, stores on the host's HDD, one vCPU): a new unit's first boot reaches Setup's welcome
 screen in 115-120 s (`BSD root` at 10 s, launchd at 10 s, the system keybag at 20 s, a short data migration
-with its progress bar), and `gl5`'s normal boot (a unit past Setup, GL firmware) its lock screen in 70 s.
+with its progress bar), and `gl5`'s normal boot (a unit past Setup, GL firmware) its lock screen in 70 s. (A
+unit put through many install boots boots slower on a hard disk: `gl5` after the seven of 2026-10-19 holds
+937,000 marker pages and 9 GB in its chip files, its 3,400 non-marker page reads at boot cost 10 ms each and
+the lock screen came at 110 s.)
 
 **The kernel's console** in a normal boot, every line that reports a failure, and why:
 
@@ -573,16 +576,41 @@ programs, and every page it reads back through the inline AES, in the clear; at 
 the crash log index, so one boot shows them all. What `gl5` recorded over 18 boots:
 
 - **`assistantd`, every boot**: `mediaserverd: RPCTimeout message received to terminate [0] with reason
-  'AudioSessionSetProperty'` (bug_type 188, a stackshot of every process). mediaserverd's main thread is
-  in a timed wait deep in the audio HAL, so an audio-session call assistantd makes never returns and
-  mediaserverd kills it. In 150 s of boot the audio engine never starts: no message on the AE2's audio
-  endpoints (rings 2-7) and no CDMA transfer on the I2S channels (0x1f-0x26). This is the AE2's audio
-  protocol, still unread (open point 9). Attributable to the emulator; not fixed.
+  'AudioSessionSetProperty'` (bug_type 188, a stackshot of every process). Fixed, see below.
 - **`MobileMail` and `MobilePhone`, once** (the same boot, opened right after Setup): `failed to launch in
   time` after 20 s of CPU: the launch watchdog against the emulator's speed, not a missing device.
 - Processes sampled over the gdbstub every 15 s (`xnu_procs.py`) show the on-demand daemons coming and
   going (securityd, calaccessd, backupd, softwareupdated, mediaremoted restart on demand, as launchd runs
   them), and no other crash report.
+
+**Why assistantd died, and the fix.** Not the audio hardware: in a boot nothing plays sound, and the AE2's
+audio rings and the I2S DMA stay idle on a real unit too. The stackshot's frames, symbolized from the shared
+cache's exports with the boot's slide (the M3 tools: `ustacks.py`, `cacheslide.py`, `machosym.py`, and the
+binary-image UUIDs of the report), and the processes sampled every 4 s show the sequence:
+
+1. mediaserverd starts at ~25 s and spends ~27 s in `FigPlayerCMSessionOneTimeInitialization`: CoreAudio's
+   HAL plugins (`VirtualAudio.plugin`), property lists, run-loop sources, and 5 s in a synchronous
+   `_CTServerConnectionCopyAudioVocoderInfo` to CommCenter, itself still starting at background priority.
+   Plain CPU work on one TCG vCPU standing in for the A5's two cores.
+2. assistantd, started at load, calls `AudioSessionSetProperty` (through AVFoundation) meanwhile.
+   AudioToolbox sends it as a MIG request with `MACH_RCV_TIMEOUT`; a gdbstub hardware breakpoint on
+   CoreMedia's `FigRPCTimeout_KillAndForceCrashReport` caught the caller there with `0x10004003`
+   (`MACH_RCV_TIMED_OUT`) and the timeout, 5000 ms, on the stack.
+3. On that timeout AudioToolbox writes the stackshot report and the caller kills itself; launchd starts
+   assistantd again later on demand.
+
+On the phone mediaserverd's initialization fits in 5 s; here it does not. The limit lives in AudioToolbox's
+`__DATA` (a global the MIG stubs reach through a non-lazy pointer), so every process starts with the
+shared cache's value: `sysvol.audio_session_timeout` raises it to 60 s on the system volume, one of the
+per-firmware edits `prepare` and `device create` apply ("Preparing the firmware" in README). It finds
+the global from AudioToolbox's own code (the one word holding 5000 that its pc-relative pointer loads
+reach inside its `__DATA`), so no address is assumed. Tried first and ruled out by the same breakpoint:
+CoreMedia's `gFigRPCTimeout` (9 s, other calls), AudioToolbox's other 9 s limit, and the
+`com.apple.coremedia` `rpc_timeout` preference (it sets `gFigRPCTimeout` in seconds, on the data volume;
+`gl5` keeps that test file, harmless). With the edit, on `gl5` and on a new unit, assistantd lives until
+its own idle exit and no report is written (below). icount (`-icount shift=0,sleep=on`) also avoided the
+kill, by running the guest's clock on executed instructions, but the guest's time-of-day then fell behind
+the host's by the boot's busy time; not adopted.
 
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
@@ -694,8 +722,8 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
 9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and
    mediaserverd start. Open: no PCM reaches the host (no I2S DMA was seen; i2s0 has no "audio-out" yet), and
    the AE2's audio endpoints (rings 2-7) have not carried a message yet, so their protocol is unread.
-   Consequence (2026-10-19, "Boot: what a normal boot logs"): an audio-session call never returns in
-   mediaserverd, which kills assistantd on every boot.
+   (assistantd's kill at boot, first put down to this, was a 5 s audio-session timeout against the
+   emulator's pace: "Boot: what a normal boot logs".)
 10. **Marker pages and the FTL's GC**: a marker page the FTL moves becomes a copy of the bytes it was
    served, so system-volume edits stop reaching the guest for the pages moved; the install boot rewrites
    all markers. A page store that kept the logical page's marker through a GC copy would make this go away.

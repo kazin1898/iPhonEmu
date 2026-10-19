@@ -144,6 +144,121 @@ def activation_shortcut(rootfs, donor=DONOR):
         v.close()
 
 
+SHARED_CACHE = "/System/Library/Caches/com.apple.dyld/dyld_shared_cache_armv7"
+AUDIO_SESSION_TIMEOUT_STOCK = 5000           # ms, 10B329
+AUDIO_SESSION_TIMEOUT_EMULATOR = 60000
+
+
+def _cache_maps(read):
+    import struct
+    u32 = lambda o: struct.unpack("<I", read(o, 4))[0]
+    u64 = lambda o: struct.unpack("<Q", read(o, 8))[0]
+    mapoff, mapcnt, imgoff, imgcnt = u32(16), u32(20), u32(24), u32(28)
+    maps = [(u64(mapoff + 32 * i), u64(mapoff + 32 * i + 8), u64(mapoff + 32 * i + 16)) for i in range(mapcnt)]
+    images = [(u64(imgoff + 32 * i), u32(imgoff + 32 * i + 24)) for i in range(imgcnt)]
+    return maps, images
+
+
+def _thumb_imm16(hw1, hw2):
+    """The 16-bit immediate of a Thumb-2 MOVW/MOVT."""
+    return ((hw1 & 0xf) << 12) | (((hw1 >> 10) & 1) << 11) | (((hw2 >> 12) & 7) << 8) | (hw2 & 0xff)
+
+
+def _pc_relative_targets(text, base):
+    """Addresses a Thumb-2 image builds with movw rd; movt rd; ...; add rd, pc (the cache's way to reach
+    its data), as {address: count}."""
+    import struct
+    out = {}
+    n = len(text) // 2
+    hw = struct.unpack("<%dH" % n, text[:2 * n])
+    for i in range(n - 6):
+        a = hw[i]
+        if a & 0xfbf0 != 0xf240:
+            continue
+        rd = (hw[i + 1] >> 8) & 0xf
+        if rd > 7 or hw[i + 2] & 0xfbf0 != 0xf2c0 or (hw[i + 3] >> 8) & 0xf != rd:
+            continue
+        imm = _thumb_imm16(a, hw[i + 1]) | _thumb_imm16(hw[i + 2], hw[i + 3]) << 16
+        for j in range(i + 4, min(i + 12, n)):
+            if hw[j] == 0x4478 | rd:                     # add rd, pc
+                t = (imm + base + 2 * j + 4) & 0xffffffff
+                out[t] = out.get(t, 0) + 1
+                break
+    return out
+
+
+def audio_session_timeout(rootfs, ms=AUDIO_SESSION_TIMEOUT_EMULATOR):
+    """The timeout of AudioToolbox's audio-session calls into mediaserverd (AudioSessionSetProperty and its
+    kin: MIG requests sent with MACH_RCV_TIMEOUT), 5000 ms in 10B329, raised to `ms` in the shared cache's
+    __DATA, where every process takes its initial value from.
+
+    When the reply does not come in time (MACH_RCV_TIMED_OUT), AudioToolbox writes a stackshot report and
+    the caller kills itself (FigRPCTimeout_KillAndForceCrashReport: "mediaserverd: RPCTimeout message
+    received to terminate [0] with reason 'AudioSessionSetProperty'"). The emulator runs the A5's two
+    cores as one TCG vCPU, and at boot mediaserverd spends about 27 s in its audio initialization
+    (CoreAudio's HAL plugins, CommCenter asked for the vocoder) before it serves sessions: assistantd's
+    first AudioSessionSetProperty waited past 5 s and assistantd was killed on every boot. At 60 s the
+    watchdog keeps its job at the emulator's pace. (Caught with a gdbstub breakpoint on the kill: the
+    mach_msg returned 0x10004003 with 5000 on the stack. CoreMedia's gFigRPCTimeout, AudioToolbox's other
+    9 s limit and the com.apple.coremedia "rpc_timeout" preference were tried first: other calls.)
+
+    The global is found, with no address assumed, as the one word holding the stock value that
+    AudioToolbox's code reaches through a non-lazy pointer it builds pc-relatively and that lies in its
+    own image's data. Idempotent; returns the report."""
+    import struct
+    v = hfs.Volume(rootfs)
+    try:
+        rec = v.resolve(v.lookup(SHARED_CACHE))
+        if rec.compressed:
+            raise ValueError(f"{SHARED_CACHE} is compressed")
+
+        def read(off, n):
+            v.f.seek(v.fork_offset(rec.data, off))
+            return v.f.read(n)
+        maps, images = _cache_maps(read)
+
+        def a2o(addr):
+            for a, size, off in maps:
+                if a <= addr < a + size:
+                    return addr - a + off
+            return None
+        u32 = lambda o: struct.unpack("<I", read(o, 4))[0]
+        at = [(a, p) for a, p in images if read(p, 128).split(b"\0")[0].endswith(b"/AudioToolbox")]
+        if len(at) != 1:
+            raise LookupError("AudioToolbox not in the shared cache")
+        mh = a2o(at[0][0])
+        segs, p = {}, mh + 28
+        for _ in range(u32(mh + 16)):
+            cmd, size = u32(p), u32(p + 4)
+            if cmd == 1:                                    # LC_SEGMENT
+                segs[read(p + 8, 16).split(b"\0")[0]] = (u32(p + 24), u32(p + 28))
+            p += size
+        text, data = segs[b"__TEXT"], segs[b"__DATA"]
+        found = set()
+        for slot in _pc_relative_targets(read(a2o(text[0]), text[1]), text[0]):
+            so = a2o(slot)
+            if so is None:
+                continue
+            ptr = u32(so)
+            if data[0] <= ptr < data[0] + data[1] and a2o(ptr) is not None and u32(a2o(ptr)) in (
+                    AUDIO_SESSION_TIMEOUT_STOCK, ms):
+                found.add(ptr)
+        if len(found) != 1:
+            raise LookupError(f"AudioToolbox's session timeout: {len(found)} candidates, not one")
+        glob = found.pop()
+        off = a2o(glob)
+        pos = v.fork_offset(rec.data, off)
+        old = u32(off)
+    finally:
+        v.close()
+    if old == ms:
+        return f"AudioToolbox's session timeout already {ms} ms"
+    with open(rootfs, "r+b") as f:
+        f.seek(pos)
+        f.write(struct.pack("<I", ms))
+    return f"AudioToolbox's session timeout (global {glob:#x}) {old} -> {ms} ms"
+
+
 def show_jobs(rootfs, jobs):
     v = hfs.Volume(rootfs)
     try:

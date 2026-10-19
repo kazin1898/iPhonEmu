@@ -284,8 +284,10 @@ def cmd_prepare(args):
 
 def firmware_edits(rootfs, args):
     """What every unit made from this system volume needs, on rootfs.hfs (per firmware, so once for all
-    of them), each idempotent: lockdownd's activation short-circuit (unless --stock-lockdownd) and the
-    launchd jobs of sysvol.UNIT_EDITS, the M3 edits (unless --stock-jobs). Returns hashes.json's record."""
+    of them), each idempotent: lockdownd's activation short-circuit (unless --stock-lockdownd), the
+    launchd jobs of sysvol.UNIT_EDITS, the M3 edits, and AudioToolbox's audio-session timeout raised to
+    the emulator's pace (sysvol.audio_session_timeout; both unless --stock-jobs). Returns hashes.json's
+    record."""
     import sysvol
     rec = {}
     if not getattr(args, "stock_lockdownd", False):
@@ -295,6 +297,8 @@ def firmware_edits(rootfs, args):
         rec["unit_edits"] = [f"{', '.join(jobs)}: {kw}" for jobs, kw in sysvol.UNIT_EDITS]
         log("launchd jobs: " + (f"{', '.join(changed)} edited" if changed else "already as every unit needs them")
             + " (CA_ENABLE_OGL=0 for backboardd and SpringBoard, BTServer and BlueTool disabled)")
+        rec["audio_session_timeout"] = sysvol.audio_session_timeout(rootfs)
+        log(f"shared cache: {rec['audio_session_timeout']}")
     return rec
 
 
