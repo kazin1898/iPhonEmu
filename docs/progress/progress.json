@@ -85,19 +85,19 @@
           "name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel",
           "percent": 85,
           "weight": 5,
-          "note": "Setup Assistant on screen (M3): AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; RGBOUT/TV-out open"
+          "note": "Setup, lock and home screens on the panel: AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; the panel's SAC wakes it after auto-lock; RGBOUT/TV-out open"
         },
         {
           "name": "GPU: GL bridge on Windows (ANGLE)",
           "percent": 60,
           "weight": 6,
-          "note": "CoreAnimation composites through ANGLE/D3D11 up to Setup (front end built without macOS); home screen and apps on it, and a speed-up over software, still open"
+          "note": "CoreAnimation composites through ANGLE/D3D11: Setup, the lock screen and the home screen with its wallpaper (2026-10-18), frame writeback asynchronous (3.9 -> 1.6 ms/frame on the host); open: the speed-up over software measured, the stock apps on it"
         },
         {
           "name": "Multitouch (SPI) and buttons",
-          "percent": 0,
+          "percent": 100,
           "weight": 3,
-          "note": "M4: the spi1 multi-touch nub stays busy (no digitizer model); A4 Z2 models to adapt"
+          "note": "N1 digitizer on spi1 (N1F56 firmware from N94.mtprops), pointer and QMP mtt up to five fingers: Setup walked by touch, slide to unlock (M4); Home, power, volume up/down (SpringBoard's ringer HUD) and the ring/silent switch (ring-switch property, Cmd+M; low = silent)"
         },
         {
           "name": "Audio (I2S, CS42L63, AE2)",
@@ -160,7 +160,8 @@
     },
     {
       "name": "M4 home screen and apps",
-      "done": false
+      "done": true,
+      "date": "2026-10-18"
     }
   ]
 }

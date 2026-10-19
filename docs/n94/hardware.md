@@ -787,6 +787,30 @@ starts it and wires the link by default (`--no-usb` for neither). What it took:
   charging glyph, the lock screen the charging battery; Ajustes > Geral > Uso > Nível da Bateria shows the
   percentage.
 
+## Touch and buttons (M4 2026-10-18; the side switch 2026-10-19)
+
+- **Digitizer.** spi1 (0x32100000, IRQ 29) is the A4 SPI block with the N1 digitizer model the N90 and N81
+  use (`ipod_touch_multitouch.c`, profile `mt_profile_n94`). The kernel's personality for `multi-touch,n94`
+  is AppleMultitouchN1SPI merging `N1F56,1` from the system volume's `N94.mtprops`: family 0x56, version
+  0x0084, the 56264-byte firmware in one CDMA burst (the SPI's TX FIFO is 64 KiB). ATN is GPIO 0x15. The
+  host's pointer is finger 0 (absolute over the 640x960 panel, left button down = touching), QMP's `mtt`
+  input events up to five fingers.
+- **Buttons.** The `buttons` node's GPIOs 0-4 (AppleM68Buttons): menu, hold, volume down, volume up,
+  ring/silent. The buttons are active low: Cmd+Shift+H, Cmd+L, Cmd+- and Cmd+= in the window, as on the A4
+  boards, and Home, End, Page Down and Page Up with no modifier (what QMP `send-key` and
+  `n94_input.py key home|power|voldown|volup` send). Home and power also latch the PMU's wake events
+  ("PMU and sensors").
+- **The ring/silent switch** stays where it is put: the machine's `ring-switch` property (true = silent,
+  default ring; `qom-set /machine ring-switch`, `n94_input.py ring silent|ring`) or Cmd+M in the window.
+  `function-button_ringerab` has flags 0, so low is silent (the iPad's has 0x100 and is the other way
+  round). Checked on `gl6`: silent brings SpringBoard's crossed bell, ring the bell with the ringer level.
+- **The panel's SAC.** Waking the panel goes through the slow adaptive clocking block (mipi-dsim reg[1],
+  0x3F110000), which AppleSamsungMIPIDSIController polls with no timeout for +0x00 bit 8: a register file
+  that reads ready (the first boot finds the link as iBoot left it and never waits).
+- **Checked** (`runs/n94/progress/2026-10-19_INPUT_toque-botoes-chave.png`, `gl6`, two cores, the GL
+  bridge): Home lights the lock screen, a swipe unlocks, volume up shows the ringer level, the side switch
+  both ways. M4's walk through Setup by touch: `2026-10-18_M4_toque-deslizou.png`, `..._M4_tela-inicial.png`.
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)

@@ -73,6 +73,7 @@ struct N94MachineState {
     Chardev *gauge;                      /* the bq27540 on uart5's HDQ line (s5l8930_hdq.c) */
     Object *pmu;                         /* the D1881 (its vbat-mv follows battery-level; its button events) */
     int battery_level;                   /* %, battery-level property */
+    bool ring_silent;                    /* ring-switch: the side switch at silent (default off: ring) */
     IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
     bool kbd_cmd, kbd_shift;
     int kbd_btn_held[Q_KEY_CODE__MAX];   /* qcode -> 1 + button pin */
@@ -272,7 +273,8 @@ static const QemuInputHandler n94_mtt_handler = {
  * ring/silent 4, active low, resting high in the GPIO model. Host keys as on the A4 boards:
  * Cmd+Shift+H home, Cmd+L hold/power, Cmd+- and Cmd+= volume; Home, End, Page Down and
  * Page Up do the same without a modifier (the Windows key rarely reaches the SDL window),
- * so the monitor's sendkey works too. A key that pressed a button always releases it.
+ * so the monitor's sendkey works too. A key that pressed a button always releases it. Cmd+M
+ * flips the ring/silent switch.
  */
 static void n94_set_button(N94MachineState *s, int pin, bool down)
 {
@@ -280,6 +282,18 @@ static void n94_set_button(N94MachineState *s, int pin, bool down)
     /* the PMU sees Home and power too: its wake events (s5l8940_d1881.c) */
     if (s->pmu && (pin == S5L8940_GPIO_BTN_MENU || pin == S5L8940_GPIO_BTN_HOLD)) {
         qemu_set_irq(qdev_get_gpio_in_named(DEVICE(s->pmu), "button", pin == S5L8940_GPIO_BTN_HOLD), down);
+    }
+}
+
+/*
+ * The ring/silent switch (buttons/ringerab, GPIO 4, flags 0: low = silent, as the iPad's is
+ * high-active with flags 0x100) is a switch, not a button: it rests where it was put. The
+ * ring-switch property sets it (QMP qom-set, also at run time) and Cmd+M flips it.
+ */
+static void n94_apply_ring_switch(N94MachineState *s)
+{
+    if (s->gpio) {
+        s5l8930_gpio_set_rest_level(s->gpio, S5L8940_GPIO_BTN_RINGER, !s->ring_silent);
     }
 }
 
@@ -313,6 +327,10 @@ static void n94_kbd_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
         case Q_KEY_CODE_H:     if (s->kbd_shift) pin = S5L8940_GPIO_BTN_MENU; break;
         case Q_KEY_CODE_MINUS: pin = S5L8940_GPIO_BTN_VOLDOWN; break;
         case Q_KEY_CODE_EQUAL: pin = S5L8940_GPIO_BTN_VOLUP; break;
+        case Q_KEY_CODE_M:
+            s->ring_silent = !s->ring_silent;
+            n94_apply_ring_switch(s);
+            return;
         default: break;
         }
     } else if (down) {
@@ -635,6 +653,7 @@ static void n94_init(MachineState *machine)
      */
     s5l8930_gpio_set_rest_level(dev, S5L8930_GPIO_PIN(0x201), false);
     s5l8930_gpio_set_rest_level(dev, S5L8930_GPIO_PIN(0x307), false);
+    n94_apply_ring_switch(s);
 
     /*
      * CDMA with its AES filter: the A4 model at the A5's addresses (same layout,
@@ -981,6 +1000,17 @@ static void n94_set_battery_level(Object *obj, Visitor *v, const char *name, voi
     n94_battery_update(s);
 }
 
+static bool n94_get_ring_switch(Object *obj, Error **errp)
+{
+    return N94_MACHINE(obj)->ring_silent;
+}
+
+static void n94_set_ring_switch(Object *obj, bool value, Error **errp)
+{
+    N94_MACHINE(obj)->ring_silent = value;
+    n94_apply_ring_switch(N94_MACHINE(obj));
+}
+
 static void n94_instance_init(Object *obj)
 {
     N94_MACHINE(obj)->battery_level = 80;
@@ -1029,6 +1059,9 @@ static void n94_class_init(ObjectClass *klass, const void *data)
                               NULL, NULL);
     object_class_property_set_description(klass, "battery-level",
         "the gas gauge's state of charge, 0-100 (default 80); settable at run time over QMP qom-set");
+    object_class_property_add_bool(klass, "ring-switch", n94_get_ring_switch, n94_set_ring_switch);
+    object_class_property_set_description(klass, "ring-switch",
+        "the ring/silent side switch at silent (default off: ring); settable at run time, Cmd+M flips it");
     object_class_property_add_str(klass, "nand", n94_get_nand, n94_set_nand);
     object_class_property_add_str(klass, "usb-tcp-addr", n94_get_usb_tcp_addr, n94_set_usb_tcp_addr);
     object_class_property_set_description(klass, "usb-tcp-addr",

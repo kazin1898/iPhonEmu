@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 67.6% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 72.2% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -160,7 +160,7 @@
 <rect x="548" y="433" width="18" height="16" rx="3" fill="#7bd389"/>
 <rect x="569" y="433" width="18" height="16" rx="3" fill="#30363d"/>
 <text x="598" y="446" fill="#e6edf3" font-weight="600">85%</text>
-<text x="642" y="446" fill="#8b949e" font-size="12">Setup Assistant on screen (M3): AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; RGBOUT/TV-out open</text>
+<text x="642" y="446" fill="#8b949e" font-size="12">Setup, lock and home screens on the panel: AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; the panel&#x27;s SAC wakes it after auto-lock; RGBOUT/TV-out open</text>
 <text x="36" y="472" fill="#e6edf3">GPU: GL bridge on Windows (ANGLE)</text>
 <rect x="380" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -173,20 +173,20 @@
 <rect x="548" y="459" width="18" height="16" rx="3" fill="#30363d"/>
 <rect x="569" y="459" width="18" height="16" rx="3" fill="#30363d"/>
 <text x="598" y="472" fill="#e6edf3" font-weight="600">60%</text>
-<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation composites through ANGLE/D3D11 up to Setup (front end built without macOS); home screen and apps on it, and a speed-up over software, still open</text>
+<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation composites through ANGLE/D3D11: Setup, the lock screen and the home screen with its wallpaper (2026-10-18), frame writeback asynchronous (3.9 -&gt; 1.6 ms/frame on the host); open: the speed-up over software measured, the stock apps on it</text>
 <text x="36" y="498" fill="#e6edf3">Multitouch (SPI) and buttons</text>
-<rect x="380" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="401" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="422" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="443" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="464" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="485" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="506" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="527" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="548" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="569" y="485" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="498" fill="#e6edf3" font-weight="600">0%</text>
-<text x="642" y="498" fill="#8b949e" font-size="12">M4: the spi1 multi-touch nub stays busy (no digitizer model); A4 Z2 models to adapt</text>
+<rect x="380" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="401" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="422" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="443" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="464" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="498" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="498" fill="#8b949e" font-size="12">N1 digitizer on spi1 (N1F56 firmware from N94.mtprops), pointer and QMP mtt up to five fingers: Setup walked by touch, slide to unlock (M4); Home, power, volume up/down (SpringBoard&#x27;s ringer HUD) and the ring/silent switch (ring-switch property, Cmd+M; low = silent)</text>
 <text x="36" y="524" fill="#e6edf3">Audio (I2S, CS42L63, AE2)</text>
 <rect x="380" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
