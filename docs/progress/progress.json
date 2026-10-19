@@ -60,9 +60,9 @@
         },
         {
           "name": "PMU D1881, I2C, sensors",
-          "percent": 50,
+          "percent": 80,
           "weight": 3,
-          "note": "events, ADC, RTC, restart; ADC channels, wake events, gyro/accel calibration open"
+          "note": "ADC muxes identified, accelerometer and gyro start (nominal calibration in the kboot DT), the bq27540 gas gauge wired on uart5, battery-level property; open: which level the status bar shows (full on Setup at 30%), wake-by-button STAT bits"
         },
         {
           "name": "DMA (CDMA) and crypto (AES, SHA, PKE)",

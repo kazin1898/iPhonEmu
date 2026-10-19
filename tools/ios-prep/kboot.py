@@ -217,6 +217,15 @@ def fill_dt(dt, board, memory_map, identity, iboot_ver, root_matching, cpus=2, n
     if slots:
         dt.set("arm-io", "clock-frequencies", board.clock_table(slots))
     dt.set_if("arm-io", "usbphy-frequency", board.fixed_hz)
+    # The motion sensors' factory calibration, which iBoot copies from the unit's syscfg into the reserved
+    # (zeroed) properties: 9 words of 16.16 each. kboot has no syscfg, so a nominal part's identity. With
+    # zeros, 6.x's AppleLIS331DLH fails its start ("Expected calibration data but didn't find any") and
+    # AppleAP3GDL finds its matrix singular, leaving the unit with no accelerometer and no gyro.
+    unit = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x10000]
+    for path, props in dt.props.items():
+        for prop in ("accel-sensitivity-calibration", "gyro-sensitivity-calibration", "gyro-sens-matrix-inverse"):
+            if prop in props:
+                dt.set(path, prop, unit)
     dt.set_if("arm-io", "chip-revision", board.chip_revision)
     # devices with no model yet are hidden from IOKit
     if dt.contains("arm-io/sgx"):

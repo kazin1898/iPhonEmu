@@ -72,6 +72,7 @@ struct HdqGaugeChardev {
     int level;              /* %, as the machine last set it */
     bool charging;
     int capacity_mah;       /* DesignCapacity: the board's battery (s5l8930_hdq_set_capacity) */
+    uint16_t device_type;   /* Control(DEVICE_TYPE): 0x0545 (iPad's bq27545) unless the board sets it */
 };
 typedef struct HdqGaugeChardev HdqGaugeChardev;
 
@@ -129,7 +130,7 @@ static void hdq_write_reg(HdqGaugeChardev *g, uint8_t reg, uint8_t data)
     if (reg == BQ_CNTL + 1) {
         /* Control(): the subcommand's answer reads back from CNTL. */
         uint16_t sub = lduw_le_p(&g->regs[BQ_CNTL]);
-        uint16_t ans = sub == CNTL_DEVICE_TYPE ? 0x0545 :
+        uint16_t ans = sub == CNTL_DEVICE_TYPE ? (g->device_type ? g->device_type : 0x0545) :
                        sub == CNTL_FW_VERSION  ? 0x0109 : 0;
 
         stw_le_p(&g->regs[BQ_CNTL], ans);
@@ -224,6 +225,12 @@ static void hdq_reset(void *opaque)
     hdq_apply_battery(g);
     g->bits = g->nbits = 0;
     g->resp_head = g->resp_tail = 0;
+}
+
+/* The part the board has (DT gas-gauge compatible): 0x0540 for the iPhones' bq27540. */
+void s5l8930_hdq_set_device_type(Chardev *chr, uint16_t type)
+{
+    HDQ_GAUGE_CHARDEV(chr)->device_type = type;
 }
 
 void s5l8930_hdq_set_capacity(Chardev *chr, int mah)

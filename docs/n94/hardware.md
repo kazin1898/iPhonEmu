@@ -140,11 +140,11 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 | uart0 | 0x32500000 | 21 | `uart-1,samsung`, **boot-console** | **A4** (Samsung UART, `exynos4210` model as ipad1.c). The kernel's serial console. |
 | uart1 | 0x32600000 | 22 | `uart-1,samsung`, `debug` | **A4** |
 | uart3 | 0x32800000 | 24 | `uart-1,samsung`; child `bluetooth,n88` | **A4**; BT stub. |
-| uart5 | 0x32A00000 | 26 | `uart-1,samsung`; child `gas-gauge,bq27540|gas-gauge,hdq` | **A4** `s5l8930_hdq.c` (the iPad's bq27545 model, 1420 mAh on n90). |
+| uart5 | 0x32A00000 | 26 | `uart-1,samsung`; child `gas-gauge,bq27540|gas-gauge,hdq` | **A4** `s5l8930_hdq.c`, wired since 2026-10-19: 1432 mAh, DEVICE_TYPE 0x0540, the machine's `battery-level` ("PMU and sensors"). |
 | spi1 | 0x32100000 | 29 | `spi-1,samsung`; child `multi-touch,n94` (GPIO irq 0x15) | **A4** `ipod_touch_spi.c` (64 KiB TX FIFO for the firmware burst) with the N1 digitizer model `ipod_touch_multitouch.c`, profile `mt_profile_n94` (M4, "Touch and buttons" below). |
 | i2c0 | 0x33200000 | 18 | `i2c,s5l8940x|iic,soft` | `hw/arm/s5l8940_i2c.c`: a PA Semi style FIFO master, not the A4 block ("The I2C controller" below). Devices: PMU `pmu,d1881` @0x74 (GPIO irq 0xd; `hw/arm/s5l8940_d1881.c`, a register file), codec `audio-control,cs42l63` @0x4a (the A4 CS42L58 model: the driver never checks the ID), `headset-switch,ts3a8235` @0x3b (none). |
 | i2c1 | 0x33300000 | 19 | same | `compass,akm8975b` @0x0d (A4 AK8975 model), `als,tsl2581` @0x49 (A4 model). |
-| i2c2 | 0x33400000 | 20 | same | `accelerometer,lis331dlh` @0x19 (the iPod LIS302DL model, WHO_AM_I 0x32; AppleLIS331DLH then fails for want of calibration data), `gyro,ap3gdl` @0x6a (A4 L3G4200D model; AppleAP3GDL finds ID 0xd3 and fails on a singular calibration matrix) and @0x68. |
+| i2c2 | 0x33400000 | 20 | same | `accelerometer,lis331dlh` @0x19 (the iPod LIS302DL model, WHO_AM_I 0x32), `gyro,ap3gdl` @0x6a (A4 L3G4200D model, ID 0xd3) and @0x68 (the DT's alternative address, empty as on a unit with its gyro at 0x6a). Both start since the kboot DT carries a nominal calibration ("PMU and sensors"). |
 | otgphyctrl | 0x36000000 | | `otgphyctrl,s5l8940x|s5l8930x` | **A4** `ipod_touch_usb_phys.c`, wired. |
 | usb-complex | 0x3F108000; ranges -> 0x36100000+0x600000 | | `usb-complex,s5l8940x|s5l8930x` | **A4** models wired: usb-device 0x36100000 (AIC 11, the iPod Synopsys OTG with the A4 GHWCFG; `AppleSynopsysOTGDevice` finds 7+7 endpoints), usb-ehci 0x36400000 (AIC 12, `exynos4210-ehci`; its second window 0x36700000 stays unimplemented), usb-ohci0 0x36500000 (AIC 13), usb-ohci1 0x36600000 (AIC 14). USB_CTL at 0x3F108000 stays in the unimplemented window. |
 | usb-ehci/wlan | HSIC port | GPIO 0x1f | | **new**: Wi-Fi is a BCM4330 over HSIC (`AppleBCMWLANBusInterfaceHSIC`), not the A4's SDIO card. There is no `sdio` node. |
@@ -705,6 +705,36 @@ and i2s-switch blocks). Decoded from the 10B329 kexts (Ghidra):
   `ios-prep` writes 24 MHz to slot 0 (the oscillator) and the `nclk` slots, the bus clock (200 MHz) to the
   `hclk` ones and the peripheral clock (100 MHz) elsewhere. The real 4S values come from iBoot's PLL setup
   and are not known here (no public ioreg dump was found); nothing the models do depends on them.
+
+## PMU and sensors (2026-10-19)
+
+- **Motion sensors.** iBoot copies the unit's factory calibration from syscfg into properties the IPSW DT
+  reserves zeroed: `accel-sensitivity-calibration` and `gyro-sensitivity-calibration` (10 words; the
+  drivers read 9, a 3x3 matrix in 16.16) and `gyro-sens-matrix-inverse`. `AppleLIS331DLH::handleStart`
+  (AppleEmbeddedAccelerometer) fails its start when the matrix is all zero ("Expected calibration data
+  but didn't find any.. Failing driver") unless the node has `NoFactoryCalibration`; `AppleAP3GDL`
+  (AppleEmbeddedGyro) inverts the matrix itself when the inverse's first word is 0 and stops on a singular
+  one. `ios-prep` writes the identity to all three (kboot has no syscfg; `ipad1.c` does the same for the
+  A4 boards). Both now start (`_calibrationMatrix [65536 0 0] [0 65536 0] [0 0 65536]`,
+  `AppleAP3GDL::handleStart ... _odr200HzSampleInterval = 5000`). `AppleAP3GDL::probe -- Failed to Probe
+  ... ID=0x0` stays for `gyro1` at 0x68: the DT lists both addresses the part can strap to, and a unit
+  populates one.
+- **D1881 ADC** (`s5l8940_d1881.c`, e2d2116bf1): the muxes AppleD1881PMU converts are identified (vbat and
+  vcc_main 0/4, the dock's D+/D- 6, NTCs, tjunc 8, vbus 15). A boot converts mux 4 once (a4) and mux 3
+  every ~2 s; muxes 0x0a-0x0e, 0x12-0x19, 0x22, 0x28 and 0x32-0x39 (with flag bits 0x80/0x40) about every
+  7 s. `vbat-mv` is a property now (default 4037 mV), set from the machine's `battery-level`.
+- **Gas gauge.** uart5 carries the bq27540 (`s5l8930_hdq.c`, the model the n90 board uses, with this
+  board's 1432 mAh and DEVICE_TYPE 0x0540). UserEventAgent's AppleHDQGasGauge plugin (shared cache
+  0x38144000) writes Control(FW_VERSION) at start and reads 0x0109 back ("firmware 1.09"), then made no
+  other HDQ transaction in six minutes; it polls on something the kernel side was not seen to send
+  (`AppleHDQGasGaugeControl` exposes the gauge's SWI line, PMU GPIO 5, and a data-log buffer).
+- **Open: the level the status bar shows.** On Setup's screen the charging battery reads full whether the
+  machine's `battery-level` is 80 or 30, with the gauge wired or not, so neither the gauge nor the vbat
+  estimate is shown as modeled. The IOPMPowerSource's properties (lockdown's battery domain) are the way
+  to settle it.
+- **Wake by button.** The DT's `wake_button_menu`/`wake_button_hold` are the PMU's `'STAT'` 0x180/0x181,
+  read when the AP wakes from sleep; on a USB host's cable iOS keeps the AP awake, so this path is not
+  exercised here and the model has no STAT bits for the buttons.
 
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 

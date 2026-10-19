@@ -224,6 +224,7 @@ void s5l8930_l3g_set_accel(DeviceState *dev, struct LIS302DLState *accel);
  * across guest resets. */
 void s5l8930_hdq_set_battery(Chardev *chr, int level, bool charging);
 void s5l8930_hdq_set_capacity(Chardev *chr, int mah);
+void s5l8930_hdq_set_device_type(Chardev *chr, uint16_t type);
 
 /*
  * Display (hw/arm/s5l8930_display.c): DisplayPipe0 + CLCD + RGBOUT/TV-out

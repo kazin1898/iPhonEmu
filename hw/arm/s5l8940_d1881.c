@@ -72,6 +72,7 @@ struct S5L8940D1881State {
     uint8_t ptr;
     bool ptr_set;           /* the first byte of a write names the register */
     uint32_t rtc_latch;     /* the counter as of the read of its first byte */
+    uint32_t vbat_mv;       /* "vbat-mv": the battery's voltage, ADC muxes 0 and 4 */
 };
 
 static void d1881_update_irq(S5L8940D1881State *s)
@@ -87,9 +88,10 @@ static void d1881_update_irq(S5L8940D1881State *s)
 /*
  * A 12-bit reading per ADC mux (AppleD1881PMU's conversions, FUN_80aec9b0, the same scalings as the
  * A4 boards' D1815): a phone at room temperature on a USB host's cable.
- *   0, 4   vcc_main, vbat: mV = 2500 + raw * 2000 / 4096. The power source reads vbat once at boot
- *          and looks it up in its battery-data curve (family 3: 4037 mV is ~80%); with no gas gauge
- *          on uart5 that estimate is the level SpringBoard shows (mid-scale, 3500 mV, was ~2%, red).
+ *   0, 4   vcc_main, vbat: mV = 2500 + raw * 2000 / 4096, from the "vbat-mv" property (default
+ *          4037, settable at run time). The power source reads vbat at boot and looks it up in its
+ *          battery-data curve (family 3: 4037 mV is ~80%), and that estimate is the level SpringBoard
+ *          shows (mid-scale, 3500 mV, was ~2%, red); the machine derives vbat-mv from its battery-level.
  *   6      the dock's D+/D- (otgphyctrl dmon_voltage): 0 V, a host's pull-downs; both lines above
  *          1 V would make it a charger brick.
  *   2, 7, 11-14  NTCs, 10 kOhm at 25 C behind a 50 uA source: 0x333.
@@ -97,12 +99,12 @@ static void d1881_update_irq(S5L8940D1881State *s)
  *   15     vbus, V = raw * 88 / 65536: 5.0 V.
  * Every other mux reads mid-scale.
  */
-static uint16_t d1881_adc_sample(unsigned chan)
+static uint16_t d1881_adc_sample(S5L8940D1881State *s, unsigned chan)
 {
     switch (chan) {
     case 0:
     case 4:
-        return 0xc4c;
+        return MIN((MAX(s->vbat_mv, 2500) - 2500) * 4096 / 2000, 0xfff);
     case 6:
         return 0;
     case 2: case 7: case 11: case 12: case 13: case 14:
@@ -118,7 +120,7 @@ static uint16_t d1881_adc_sample(unsigned chan)
 
 static void d1881_adc_start(S5L8940D1881State *s, uint8_t ctrl)
 {
-    uint16_t v = d1881_adc_sample(ctrl & 0x1f);
+    uint16_t v = d1881_adc_sample(s, ctrl & 0x1f);
 
     s->regs[D1881_ADC_RES_L] = v & 0xf;
     s->regs[D1881_ADC_RES_H] = v >> 4;
@@ -212,7 +214,11 @@ static void d1881_reset(DeviceState *dev)
 
 static void d1881_init(Object *obj)
 {
-    qdev_init_gpio_out(DEVICE(obj), &S5L8940_D1881(obj)->irq, 1);
+    S5L8940D1881State *s = S5L8940_D1881(obj);
+
+    qdev_init_gpio_out(DEVICE(obj), &s->irq, 1);
+    s->vbat_mv = 4037;
+    object_property_add_uint32_ptr(obj, "vbat-mv", &s->vbat_mv, OBJ_PROP_FLAG_READWRITE);
 }
 
 static const VMStateDescription vmstate_d1881 = {

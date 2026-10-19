@@ -49,6 +49,8 @@
 #include "hw/arm/guest-package.h"
 #include "ui/console.h"
 #include "ui/input.h"
+#include "qapi/visitor.h"
+#include "chardev/char.h"
 
 #define TYPE_N94_MACHINE MACHINE_TYPE_NAME("iPhone-4S")
 #define N94_MAX_CPUS 2                   /* the A5's two Cortex-A9s (DT cpus/cpu0, cpu1) */
@@ -68,6 +70,9 @@ struct N94MachineState {
     MemoryRegion sac;                    /* the panel's adaptive clocking block (n94_sac_ops) */
     uint32_t sac_regs[0x40];
     struct N94RegFile *dwi, *pl310_cif, *armio[2];
+    Chardev *gauge;                      /* the bq27540 on uart5's HDQ line (s5l8930_hdq.c) */
+    Object *pmu;                         /* the D1881 (its vbat-mv follows battery-level) */
+    int battery_level;                   /* %, battery-level property */
     IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
     bool kbd_cmd, kbd_shift;
     int kbd_btn_held[Q_KEY_CODE__MAX];   /* qcode -> 1 + button pin */
@@ -78,6 +83,8 @@ struct N94MachineState {
     GuestPackage pkg;                    /* the GL front end's hello, guest packages (hw/arm/guest-package.c) */
     CPUState *gl_owner;                  /* the vCPU whose host thread has the GL contexts current */
 };
+
+static void n94_battery_update(N94MachineState *s);
 
 #define KBOOT_MAGIC "K48KBOOT"
 #define KBOOT_TRAILER_LEN 24
@@ -725,6 +732,8 @@ static void n94_init(MachineState *machine)
             }
             i2c_slave_realize_and_unref(slave, bus[slaves[i].bus], &error_fatal);
             if (!strcmp(slaves[i].type, TYPE_S5L8940_D1881)) {
+                s->pmu = OBJECT(slave);
+                n94_battery_update(s);
                 /* the PMU interrupts on GPIO 0x0d, active low (DT pmu interrupts {0xd, 1}) */
                 qdev_connect_gpio_out(DEVICE(slave), 0,
                                       qemu_irq_invert(qdev_get_gpio_in(s->gpio, S5L8930_GPIO_PIN(0x00d))));
@@ -856,19 +865,31 @@ static void n94_init(MachineState *machine)
     /*
      * Samsung UARTs, the four the N94 device tree has: uart0 is the kernel's
      * console (-serial), uart1 its debug port (the second -serial); uart3
-     * (Bluetooth HCI) and uart5 (the gas gauge's HDQ) are silent: nothing is
-     * attached, as on the fork's A4 boards, but the block must exist, or
-     * AppleOnboardSerial's rx DMA path reads zeros where it expects FIFO
-     * status and panics on its queue accounting (AppleSimpleUARTSync.cpp:2177)
-     * when BlueTool opens uart3.
+     * (Bluetooth HCI) is silent: nothing is attached, as on the fork's A4
+     * boards, but the block must exist, or AppleOnboardSerial's rx DMA path
+     * reads zeros where it expects FIFO status and panics on its queue
+     * accounting (AppleSimpleUARTSync.cpp:2177) when BlueTool opens uart3.
      */
-    for (i = 0; i < 6; i++) {
-        if (i == 2 || i == 4) {
+    for (i = 0; i < 4; i++) {
+        if (i == 2) {
             continue;
         }
         exynos4210_uart_create(S5L8940_UART_BASE(i), 256, i, i < 2 ? serial_hd(i) : NULL,
                                n94_irq(s, S5L8940_IRQ_UART(i)), true);
     }
+    /*
+     * uart5 carries the battery's gas gauge (DT uart5/gas-gauge, gas-gauge,bq27540|gas-gauge,hdq): the
+     * iPhone 4's bq27540 model the n90 board uses (hw/arm/s5l8930_hdq.c), which configd's
+     * AppleHDQGasGauge plugin polls over HDQ; that is what SpringBoard's battery shows. A 16-byte FIFO
+     * as the silicon's (ipad1.c has why). Without it the status bar showed the D1881 power source's
+     * one-off estimate from the battery voltage. 1432 mAh, the 4S battery's; the level is the
+     * battery-level property (default 80), charging while the USB host's cable is in (always here).
+     */
+    s->gauge = qemu_chardev_new(NULL, TYPE_CHARDEV_S5L8930_HDQ, NULL, NULL, &error_abort);
+    s5l8930_hdq_set_capacity(s->gauge, 1432);
+    s5l8930_hdq_set_device_type(s->gauge, 0x0540);
+    s5l8930_hdq_set_battery(s->gauge, s->battery_level, true);
+    exynos4210_uart_create(S5L8940_UART_BASE(5), 16, 5, s->gauge, n94_irq(s, S5L8940_IRQ_UART(5)), true);
 
     qemu_register_reset(n94_cpu_reset, s);
 }
@@ -899,8 +920,52 @@ static void n94_set_nand(Object *obj, const char *value, Error **errp)
     s->nand_path = g_strdup(value);
 }
 
+/*
+ * The battery's state of charge goes to the gas gauge and to the D1881's battery voltage (ADC mux 4,
+ * which AppleD1881PMUPowerSource reads at boot and looks up in its battery-data curve, family 3: 4037 mV
+ * read ~80% and 3500 mV ~2%, so a line through those two, clamped at 3500-4200 mV). configd's
+ * AppleHDQGasGauge reads the gauge's firmware version at start and then waits for something that was
+ * not seen to come in six minutes. Which of the two the status bar shows is not settled: on the Setup
+ * screen the charging battery reads full at 30% either way (docs/n94/hardware.md "PMU and sensors").
+ */
+static void n94_battery_update(N94MachineState *s)
+{
+    int mv = 3500 + (s->battery_level - 2) * (4037 - 3500) / (80 - 2);
+
+    if (s->pmu) {
+        object_property_set_uint(s->pmu, "vbat-mv", MIN(MAX(mv, 3500), 4200), &error_abort);
+    }
+    if (s->gauge) {
+        s5l8930_hdq_set_battery(s->gauge, s->battery_level, true);
+    }
+}
+
+static void n94_get_battery_level(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    int64_t value = N94_MACHINE(obj)->battery_level;
+
+    visit_type_int(v, name, &value, errp);
+}
+
+static void n94_set_battery_level(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    N94MachineState *s = N94_MACHINE(obj);
+    int64_t value;
+
+    if (!visit_type_int(v, name, &value, errp)) {
+        return;
+    }
+    if (value < 0 || value > 100) {
+        error_setg(errp, "battery-level must be between 0 and 100");
+        return;
+    }
+    s->battery_level = value;
+    n94_battery_update(s);
+}
+
 static void n94_instance_init(Object *obj)
 {
+    N94_MACHINE(obj)->battery_level = 80;
     guest_pkg_init(&N94_MACHINE(obj)->pkg, obj);
 }
 
@@ -928,6 +993,10 @@ static void n94_class_init(ObjectClass *klass, const void *data)
     object_class_property_add_str(klass, "kboot", n94_get_kboot, n94_set_kboot);
     object_class_property_set_description(klass, "kboot",
         "K48KBOOT bundle from tools/ios-prep (required)");
+    object_class_property_add(klass, "battery-level", "int", n94_get_battery_level, n94_set_battery_level,
+                              NULL, NULL);
+    object_class_property_set_description(klass, "battery-level",
+        "the gas gauge's state of charge, 0-100 (default 80); settable at run time over QMP qom-set");
     object_class_property_add_str(klass, "nand", n94_get_nand, n94_set_nand);
     object_class_property_set_description(klass, "nand",
         "PPN page-store directory (geometry.json + ch<n>-ce<m>.pages, tools/ios-prep nand); blank chips if unset");
