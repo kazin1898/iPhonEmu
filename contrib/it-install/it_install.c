@@ -19,19 +19,21 @@
  *      later are ordinary pages;
  *   3. writes an MBR with two Apple_HFS partitions: the system volume and the data volume (the
  *      MBR last, so a half-done install is not taken for a finished one);
- *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, mounts it at
- *      /mnt2 and creates the directories iOS expects under /private/var;
+ *   4. runs the ramdisk's own newfs_hfs on the data partition, as restored would, and turns its
+ *      content protection on (kHFSContentProtectionBit) before anything is written there;
  *   5. execs it_keybag (contrib/it-install/it_keybag.c, dyld-linked, staged on the ramdisk by
- *      guest_install.py), the data-protection step: it formats the effaceable storage and
- *      creates the system keybag at /mnt2/keybags/systembag.kb, as restored_external does on a
- *      real restore and the fork's it_keybag on the A4 boards;
- *   6. writes launchd's overrides database (db/launchd.db/com.apple.launchd/overrides.plist)
- *      disabling the Bluetooth jobs (no controller behind uart3, as on the fork's A4 boards) and,
- *      only if step 5 failed, keybagd (without the system keybag its kb_load fails and it reboots
- *      the device into recovery 20 s after launchd). The system volume stays as Apple shipped it;
- *      the knobs live on the emulator's data volume;
- *   7. turns the data volume's content protection on (kHFSContentProtectionBit; off while it writes, so
- *      its files stay plaintext), syncs and halts.
+ *      guest_install.py), the data-protection step, as restored_external does on a real restore
+ *      and the fork's it_keybag on the A4 boards: it formats the effaceable storage (before the
+ *      data volume is mounted) and, once the volume is mounted at /mnt2, creates the system
+ *      keybag at /mnt2/keybags/systembag.kb;
+ *   6. creates the directories and files iOS expects under /private/var and writes launchd's
+ *      overrides database (db/launchd.db/com.apple.launchd/overrides.plist) disabling the
+ *      Bluetooth jobs (no controller behind uart3, as on the fork's A4 boards) and, only if step 5
+ *      failed, keybagd (without the system keybag its kb_load fails and it reboots the device
+ *      into recovery 20 s after launchd). Each file gets its class key as it is created, as on a
+ *      restored device. The system volume stays as Apple shipped it; the knobs live on the
+ *      emulator's data volume;
+ *   7. syncs and halts.
  *
  * Every step is idempotent: a second run finds the MBR ("already installed"), writes the markers again
  * (the FTL's garbage collection detaches the pages it moves) and makes a missing data volume.
@@ -351,11 +353,13 @@ static int data_has_volume(uint8_t *buf)
 
 /*
  * kHFSContentProtectionBit on or off in the data volume's header, the volume unmounted (the kernel goes
- * by the primary header; the alternate one is left as it is). The install works with it off: on a
- * protected volume what the helper writes is encrypted under the install boot's keys and unreadable on
- * the next boot (launchd ignored the overrides and ran BTServer). On again afterwards: files without a
- * cprotect attribute stay plaintext, and what the daemons create from then on gets its class. 0 on
- * success.
+ * by the primary header; the alternate one is left as it is). On before the install mounts it, as a
+ * restore leaves it: on a protected volume xnu gives a file without a cprotect attribute a new class D
+ * key when it is first opened and reads its data through that key from then on, so a file this helper
+ * wrote with the bit off (plaintext, no attribute) read as garbage on the next boot once the page store
+ * applied the FMI's inline AES (the system keybag: "FATAL KEYBAG ERROR: kb_load"). Written with the bit
+ * on, after it_keybag has formatted the effaceable storage, each file gets its key at creation and its
+ * pages go through the AES like those of any file the daemons write. 0 on success.
  */
 static int data_protect(uint8_t *buf, int on)
 {
@@ -489,9 +493,11 @@ static int write_overrides(const char *path, int keybagd_off)
                        (keybagd_off ? sizeof(overrides_keybagd) - 1 : 0)) ? 0 : -1;
 }
 
-/* The data volume gets the directories launchd and the daemons expect (restored's skeleton) and the
- * overrides database; every step is idempotent, so this runs on every install boot. */
-static void populate_data(int con)
+/* The data volume (protected, data_protect) gets the system keybag, the directories launchd and the
+ * daemons expect (restored's skeleton) and the overrides database; every step is idempotent, so this
+ * runs on every install boot. The keybag step comes first: what is written before the effaceable
+ * storage is formatted would be wrapped with keys the next boot does not have. */
+static void populate_data(int con, uint8_t *buf)
 {
     static const char *const fsck[] = { "fsck_hfs", "-fy", DATA_DEV, 0 };
     static const char *const mount[] = { "mount_hfs", DATA_BDEV, DATA_MNT, 0 };
@@ -511,16 +517,29 @@ static void populate_data(int con)
     uint32_t i, j, k;
     int kb;
 
+    /* The effaceable storage formatted before the mount (it_keybag's keybag step fails here, nothing is
+     * mounted yet): AppleKeyStore looks for its lockers when a protected volume is mounted, and on a
+     * volume mounted without them every file creation is refused (EPERM). */
+    say(con, "it_install: effaceable storage first (the keybag waits for the mount)\n");
+    run(con, KEYBAG_HELPER, keybag);
     run(con, "/sbin/fsck_hfs", fsck);        /* a volume the last boot left mounted needs its journal replayed */
     if (run(con, "/sbin/mount_hfs", mount) != 0) {
         /* Past repair (an emulator quit mid-write before the volume was journaled): made anew, as a
          * restore would make it; the keybag step below then creates a new system keybag for it. */
         say(con, "it_install: mount_hfs failed, newfs_hfs Data again\n");
-        if (run(con, "/sbin/newfs_hfs", newfs) != 0 || run(con, "/sbin/mount_hfs", mount) != 0) {
+        if (run(con, "/sbin/newfs_hfs", newfs) != 0 || data_protect(buf, 1) != 0 ||
+            run(con, "/sbin/mount_hfs", mount) != 0) {
             say(con, "it_install: data volume left empty\n");
             return;
         }
     }
+    /* The data-protection step, with the data volume mounted: the effaceable format needs the trusted
+     * root this ramdisk is, and the keybag goes to DATA_MNT/keybags. Its stdout/stderr reach the console
+     * (dyld's own complaints included). */
+    mkdir_as(DATA_MNT "/keybags", 0755, 0);
+    kb = run(con, KEYBAG_HELPER, keybag);
+    say(con, kb == 0 ? "it_install: system keybag in place, keybagd stays enabled\n"
+                     : "it_install: no system keybag (it_keybag failed), keybagd disabled\n");
     for (i = 0; dirs[i]; i++) {
         const char *d = dirs[i];
         int mode = 0755, uid = 0;
@@ -543,12 +562,6 @@ static void populate_data(int con)
     }
     mkdir_as(DATA_MNT "/tmp", 01777, 0);
     say_num(con, "it_install: /private/var skeleton from the system volume, entries ", (uint32_t)var_skeleton());
-    /* The data-protection step, with the data volume mounted: the effaceable format needs the trusted
-     * root this ramdisk is, and the keybag goes to DATA_MNT/keybags. Its stdout/stderr reach the console
-     * (dyld's own complaints included). */
-    kb = run(con, KEYBAG_HELPER, keybag);
-    say(con, kb == 0 ? "it_install: system keybag in place, keybagd stays enabled\n"
-                     : "it_install: no system keybag (it_keybag failed), keybagd disabled\n");
     say_num(con, "it_install: launchd overrides (BTServer, BlueTool disabled) -> ",
             (uint32_t)write_overrides(DATA_MNT "/db/launchd.db/com.apple.launchd/overrides.plist", kb != 0));
     sys(SYS_sync, 0, 0, 0, 0);
@@ -559,10 +572,8 @@ static void populate_data(int con)
 __attribute__((section(".text.start"), noreturn)) void _start(void)
 {
     /* Journaled (-J): the emulator is quit without a guest shutdown, and the journal is what keeps the
-     * volume mountable after that (an unjournaled one went past fsck's repair once). Not -P (which this
-     * newfs_hfs takes): made with it, the volume was protected during the install, and what this helper
-     * wrote there (the keybag, launchd's overrides) was unreadable on the next boot. The bit goes on
-     * once the install's files are in (data_protect). */
+     * volume mountable after that (an unjournaled one went past fsck's repair once). Protected by
+     * data_protect afterwards, for both a new volume and one a previous install left. */
     static const char *const newfs[] = { "newfs_hfs", "-s", "-J", "-v", "Data", DATA_DEV, 0 };
     uint8_t buf[CHUNK * BLOCK] __attribute__((aligned(16)));
     uint64_t blocks = 0;
@@ -692,9 +703,6 @@ __attribute__((section(".text.start"), noreturn)) void _start(void)
 #endif
     if (has) {
         say(con, "it_install: data volume present\n");
-        if (has == 1) {
-            say_num(con, "it_install: content protection off for the install -> ", (uint32_t)data_protect(buf, 0));
-        }
     } else {
         say(con, "it_install: newfs_hfs Data\n");
         st = run(con, "/sbin/newfs_hfs", newfs);
@@ -702,8 +710,8 @@ __attribute__((section(".text.start"), noreturn)) void _start(void)
             park(con, "newfs_hfs");
         }
     }
-    populate_data(con);
     say_num(con, "it_install: content protection on -> ", (uint32_t)data_protect(buf, 1));
+    populate_data(con, buf);
     sys(SYS_sync, 0, 0, 0, 0);
     msleep(1000);
     say(con, "it_install: done\n");

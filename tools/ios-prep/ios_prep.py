@@ -447,6 +447,11 @@ def install_device(dev, fw, meta, args):
     """The install boot, start to finish: helpers and markers for this store, the install bundle, the boot
     until "it_install: done", then the normal bundle. The device is "ready" only after all of it."""
     import device
+    fmt = store_geometry(dev.nand).get("format")
+    if fmt != nand_ppn.PPN["format"]:
+        raise SystemExit(f"device {dev.name!r}: its store is {fmt} (made before 2026-10-18); the install writes the "
+                         f"data volume protected now, which only a {nand_ppn.PPN['format']} store keeps readable: "
+                         f"device delete {dev.name}, then device create it again")
     meta["state"] = "installing"
     dev.save(meta)
     cmd_install(argparse.Namespace(dir=fw, nand=dev.nand, out=dev.install, ipsw=meta.get("ipsw"),

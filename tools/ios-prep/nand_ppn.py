@@ -13,6 +13,12 @@ A store of another size (`geometry`) keeps the chips and scales the blocks per C
 the sizes the iPhone 4S was sold in (8 GiB came in 2013), 2 and 4 GiB are for tests. The FTL exports a
 little under the raw size (1,953,125 4-KiB sectors, 8.0 GB, of the 8 GiB part) and the install boot gives
 the data volume what the system volume leaves.
+
+Format "ppn-xor-ff-v2" (new stores): the model applies the FMI's inline AES as the chips would see it, so
+the pages of content-protected files are stored encrypted with their file keys. "ppn-xor-ff-v1" stores
+(before 2026-10-18) were written with that AES skipped; the model still serves them that way, and every
+protected file written in one session reads as garbage in the next. ios_prep.py refuses to
+re-run the install boot on them (docs/n94/hardware.md "Storage: the FMI's inline AES").
 """
 import ctypes
 import json
@@ -21,7 +27,7 @@ import struct
 import sys
 
 PPN = {
-    "format": "ppn-xor-ff-v1",
+    "format": "ppn-xor-ff-v2",
     "channels": 2,
     "ce_per_channel": 1,
     "caus_per_ce": 2,
