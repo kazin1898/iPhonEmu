@@ -232,6 +232,8 @@ struct S5L8940IOPState {
     int64_t opened_ns;
     /* the marker-page map (nand_map_*): which stored pages are whole marker pages */
     bool page_map;              /* "page-map" */
+    char *dump_writes;          /* "dump-writes": a host file, every programmed logical page in the clear */
+    FILE *dump;
     QemuMutex map_lock;
     GHashTable *mpages[NAND_MAX_CHANNELS][NAND_MAX_CE];    /* page index -> MarkerPage */
     uint32_t *bgen[NAND_MAX_CHANNELS][NAND_MAX_CE];        /* per block, bumped by every change */
@@ -1543,6 +1545,10 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
                         !fmi_aes_page(s, aes, cmd, ivn, page + k * lpn_bytes, false)) {
                         st = PPN_ST_ERROR;
                     }
+                    if (s->dump && aes && !erased) {
+                        fprintf(s->dump, "\n=== read ch%d ce%u row 0x%08x lpn %u aes ===\n", ch, ce, row, k);
+                        fwrite(page + k * lpn_bytes, 1, lpn_bytes, s->dump);
+                    }
                     ivn++;
                     seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, true);
                     seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, true);
@@ -1557,6 +1563,11 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
             for (k = first; k < first + count; k++) {
                 seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, false);
                 seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, false);
+                if (s->dump) {
+                    /* debugging the guest's files: what it writes, before the AES */
+                    fprintf(s->dump, "\n=== ch%d ce%u row 0x%08x lpn %u%s ===\n", ch, ce, row, k, aes ? " aes" : "");
+                    fwrite(page + k * lpn_bytes, 1, lpn_bytes, s->dump);
+                }
                 if (aes && !fmi_aes_page(s, aes, cmd, ivn, page + k * lpn_bytes, true)) {
                     st = PPN_ST_ERROR;
                 }
@@ -1957,6 +1968,9 @@ static void s5l8940_iop_realize(DeviceState *dev, Error **errp)
         if (*errp) {
             return;
         }
+        if (s->dump_writes) {
+            s->dump = fopen(s->dump_writes, "ab");
+        }
         s->exit_notifier.notify = s5l8940_iop_exit;
         qemu_add_exit_notifier(&s->exit_notifier);
     }
@@ -2079,6 +2093,10 @@ static void s5l8940_iop_exit(Notifier *n, void *data)
     if (s->mpages[0][0]) {
         nand_map_save(s);
     }
+    if (s->dump) {
+        fclose(s->dump);
+        s->dump = NULL;
+    }
 }
 
 static const VMStateDescription vmstate_s5l8940_iop = {
@@ -2103,6 +2121,7 @@ static const Property s5l8940_iop_props[] = {
     DEFINE_PROP_UINT32("window-offset", S5L8940IOPState, window_offset, 0x40000000),
     DEFINE_PROP_STRING("nand", S5L8940IOPState, nand_dir),
     DEFINE_PROP_BOOL("page-map", S5L8940IOPState, page_map, true),
+    DEFINE_PROP_STRING("dump-writes", S5L8940IOPState, dump_writes),
 };
 
 static void s5l8940_iop_class_init(ObjectClass *klass, const void *data)

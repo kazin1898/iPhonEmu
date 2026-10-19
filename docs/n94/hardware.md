@@ -547,6 +547,43 @@ The install boot ends the same way now: `it_install`'s halt powers the machine o
 for that (up to 90 s) instead of quitting QEMU 3 s after `it_install: done`, which had left the FTL to
 open the next boot with "unclean shutdown".
 
+## Boot: what a normal boot logs, and what still falls (2026-10-19)
+
+Times (16 GiB units, stores on the host's HDD, one vCPU): a new unit's first boot reaches Setup's welcome
+screen in 115-120 s (`BSD root` at 10 s, launchd at 10 s, the system keybag at 20 s, a short data migration
+with its progress bar), and `gl5`'s normal boot (a unit past Setup, GL firmware) its lock screen in 70 s.
+
+**The kernel's console** in a normal boot, every line that reports a failure, and why:
+
+| Line | Cause | Emulator? |
+|---|---|---|
+| `wlan ... resetWaitTillEnumeration(): Error (I/O timeout) waiting for bus to attach`, `Bus enumeration failure` | no BCM4330 behind the HSIC port | yes, by design (radios are stubs) |
+| `hsic-baseband ... device has not connected after 1500ms` | no baseband | yes, by design |
+| `AppleH4CamIn::power_on_hardware - ISP_Init failed: 0xE00002D6` (three times) | the camera ISP is not modeled | yes, unmodeled block |
+| `AppleJPEGHal::reset_jpeg_block() : SW Reset failed (2)` | the JPEG block (0x38200000) is not modeled | yes, unmodeled block |
+| `AppleM2ScalerCSCHal::setScalerPropertiesAndExtents() WARNING: Failed to find properties ... SOC 0x0` | the scalers are not modeled | yes, unmodeled block |
+| `AppleLIS331DLH::handleStart Expected calibration data but didn't find any.. Failing driver`, `AppleAP3GDL::probe -- Failed to Probe` | no factory calibration for the accelerometer and gyro (it lives in syscfg on a real unit) | yes |
+| `AppleTVOut::start ... Couldn't find video LDO function` | no TV-out on this board's DT | no (same on hardware) |
+| `[NAND] s_cxt_boot:88 sftl: error, unclean shutdown; adopted N spans` | the session before ended with no shutdown (QMP `quit`, a closed window, a kill) | gone after a power-off ("Power" above) |
+
+None of these stops a daemon. **User space** writes no console here, so its failures were read from the
+unit's own crash reports: the store model's `dump-writes` property (debugging only, off by default:
+`-global driver=s5l8940.iop,property=dump-writes,value=FILE`) appends every logical page the guest
+programs, and every page it reads back through the inline AES, in the clear; at boot `OTACrashCopier` reads
+the crash log index, so one boot shows them all. What `gl5` recorded over 18 boots:
+
+- **`assistantd`, every boot**: `mediaserverd: RPCTimeout message received to terminate [0] with reason
+  'AudioSessionSetProperty'` (bug_type 188, a stackshot of every process). mediaserverd's main thread is
+  in a timed wait deep in the audio HAL, so an audio-session call assistantd makes never returns and
+  mediaserverd kills it. In 150 s of boot the audio engine never starts: no message on the AE2's audio
+  endpoints (rings 2-7) and no CDMA transfer on the I2S channels (0x1f-0x26). This is the AE2's audio
+  protocol, still unread (open point 9). Attributable to the emulator; not fixed.
+- **`MobileMail` and `MobilePhone`, once** (the same boot, opened right after Setup): `failed to launch in
+  time` after 20 s of CPU: the launch watchdog against the emulator's speed, not a missing device.
+- Processes sampled over the gdbstub every 15 s (`xnu_procs.py`) show the on-demand daemons coming and
+  going (securityd, calaccessd, backupd, softwareupdated, mediaremoted restart on demand, as launchd runs
+  them), and no other crash report.
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
@@ -657,6 +694,8 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
 9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and
    mediaserverd start. Open: no PCM reaches the host (no I2S DMA was seen; i2s0 has no "audio-out" yet), and
    the AE2's audio endpoints (rings 2-7) have not carried a message yet, so their protocol is unread.
+   Consequence (2026-10-19, "Boot: what a normal boot logs"): an audio-session call never returns in
+   mediaserverd, which kills assistantd on every boot.
 10. **Marker pages and the FTL's GC**: a marker page the FTL moves becomes a copy of the bytes it was
    served, so system-volume edits stop reaching the guest for the pages moved; the install boot rewrites
    all markers. A page store that kept the logical page's marker through a GC copy would make this go away.

@@ -21,7 +21,7 @@
           "name": "Boot to launchd (userland)",
           "percent": 95,
           "weight": 5,
-          "note": "M2/M3: launchd, every daemon, the first-boot data migration (~14 min emulated) and SpringBoard with Setup"
+          "note": "M2/M3: launchd, every daemon, SpringBoard; first boot to Setup 115 s, normal boot to the lock screen 70 s; console errors all from unmodeled blocks or radios; open: assistantd killed every boot by mediaserverd's AudioSessionSetProperty timeout (the AE2 audio engine never starts)"
         },
         {
           "name": "Storage: IOP, PPN NAND, FTL, NVRAM",
