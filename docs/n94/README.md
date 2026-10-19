@@ -106,7 +106,11 @@ opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh`
 first boot had a 14-minute data migration first). Setup goes on to the home screen with no activation
 page ("Activation").
 
-`device refresh NAME` repeats the install boot on an installed store. The markers are written again and
+Stores made since 2026-10-18 are `ppn-xor-ff-v2`: the page store applies the FMI's inline AES, so what the
+guest writes under content protection (Setup's completion, the wallpaper, the icon caches) reads back on
+the next boot. A v1 device keeps working as it was but forgets those on every boot; make it again.
+
+`device refresh NAME` repeats the install boot on an installed store (v2 only). The markers are written again and
 the data volume and keybag are kept. A device needs this after a later edit to its firmware's
 `rootfs.hfs`, because the FTL's garbage collection copies served pages and those copies do not follow
 the edit ("M3", item 4).
@@ -456,16 +460,19 @@ Setup again; panel frames dumped at every latch by a temporary hook in `front_la
   its damage (`2026-10-18_GL_setup-skip-sem-pisca.png`).
 - **The Calendar icon** came out with 4 rows of random pixels under it (`2026-10-18_GL_home-calendario-faixa.png`)
   on one boot, and on two others with only its day and date, no white page (`...-sem-fundo.png`). Not the
-  bridge: every surface import was compared row by row with the same rows read through the binding process's
-  MMU (identical), and the icon's memory was never written after the import. The icon is the one 118x124
-  surface not at a page's start + 0x20 (`0x...a80`): the image SpringBoard composes at run time, and what it
-  leaves there differs from boot to boot (rows 120-123 hold reused, never-written memory where the other icons
-  have the end of their shadow). Passing the size `texImageIOSurface:` is given (the GL engine's texture size)
-  instead of the surface's own changed nothing: CA asks for 118x124 for it. Open: why SpringBoard's Calendar
-  image is incomplete here (its drawing, or an accelerator path the N94 lacks: the scalers at 0x38300000 and
-  0x38400000 are not modeled, "Scaler HW version 0").
-- Setup's completion does not survive a reboot of these units (`gl` and `m4gl` start at "slide to set up"
-  again after a QMP `quit`), so every home-screen check means walking Setup and its Terms again.
+  bridge: every surface import matched the same rows read through the binding process's MMU. The image
+  SpringBoard composes for it was incomplete because what it composes from read as garbage (its icon
+  caches are content protected; not traced file by file), as did the wallpaper (`LockBackground.cpbitmap`, absent on M4's software
+  path too) and Setup's completion: the page store did not apply the FMI's inline AES (hardware.md
+  "Storage: the FMI's inline AES"). Fixed in the model for `ppn-xor-ff-v2` stores (f828e13a8f) with the
+  install writing onto a protected volume (6b1c3b14a4): on a new unit, after Setup and a reboot, the lock
+  screen, then the home screen with the wallpaper and a whole Calendar icon
+  (`2026-10-18_AES_GL_home-papel-e-calendario.png`). The scalers (0x38300000, 0x38400000) and the JPEG
+  block (0x38200000) were not needed for it and stay unmodeled.
+- Setup's completion now survives a reboot on units made since then. `gl` and `m4gl` are v1 stores and
+  still start at "slide to set up"; `device refresh` refuses them, `device delete` + `device create`
+  makes them anew. On a GL firmware directory, `device create` reapplies the per-firmware launchd edits,
+  `CA_ENABLE_OGL=0` included (CoreAnimation back on its software path); `--stock-jobs` skips them.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

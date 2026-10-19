@@ -417,6 +417,48 @@ Alternatives, costed:
   would reopen path (a) with the proven A4 generator, at the price of a kernelcache not built for this board
   (PMU, panel, touch and baseband kexts differ); an hour to check, outcome uncertain.
 
+## Storage: the FMI's inline AES (2026-10-18)
+
+Why the units forgot Setup on every boot, showed no wallpaper and drew the Calendar icon with a strip or no
+page: the files behind them (`com.apple.purplebuddy.plist`, SpringBoard's `IconState.plist` and
+`LockBackground.cpbitmap`, the icon caches) are content protected, and the page store did not apply the
+AES the kernel asks the FMI for. Their catalog records were on the NAND, their data was not readable.
+
+- **The command** (the IOP's PPN read and program, opcodes 16 and 18, the 512-byte command at `cmd`):
+  +0x34 a pointer to a list of 16-byte IVs, +0x38 their count (one per logical page the command moves,
+  in entry order), +0x3c the data unit (0x1000, the 4 KiB logical page; 0 when the command wants no AES),
+  +0x40 the cipher (3, AES-256), +0x44 the 32-byte key, the file's own key as HFS content protection
+  unwrapped it. The FMI runs AES-256-CBC over each logical page with that page's IV: encrypting on the way
+  to the chips, decrypting on the way back. Erase commands carry none.
+- **Measured** with the command's fields traced and the stored pages read from the `.pages` files: pages
+  of a preferences plist decrypted offline (key and IV from the read command) to `bplist00` ...
+  `AppleLanguages`. Single-page reads of small files each come with their own key; an 8-page read of a
+  database with one key and 16 IVs.
+- **Two write paths.** The kernel programs some protected pages through the inline AES and others it has
+  already encrypted with the AES engine (`IOAESAccelerator` on the CDMA filter) as plain programs; it
+  reads both kinds back through the inline AES. A store that skipped the AES both ways (format
+  `ppn-xor-ff-v1`) gave back the first kind right and the second still encrypted, as soon as the buffer
+  cache no longer held them: after a reboot every protected file written in the session read as garbage.
+  In the install boot of a protected volume every write took the second path (no inline-AES program at
+  all); in a normal boot most go through the inline AES.
+- **The model** (`fmi_inline_aes`, `fmi_aes_page` in `s5l8940_iop.c`): for stores of format
+  `ppn-xor-ff-v2` it decrypts each read logical page that is neither erased nor a served marker, and
+  encrypts each programmed one, with QEMU's AES-256-CBC; an IV past the command's list or another cipher
+  or unit is a page error (logged once). v1 stores keep the pass-through: they hold pages that inline-AES
+  programs stored in the clear, which would read as garbage through it. `nand_ppn.py` writes v2.
+- **Files without a key.** xnu gives a file that has no `com.apple.system.cprotect` attribute on a
+  protected volume a new class D key when it is first opened, and reads its data through that key from
+  then on. The install used to write the data volume unprotected and set kHFSContentProtectionBit at the
+  end, so its files (the system keybag, launchd's overrides, the `/private/var` skeleton) were plaintext
+  with no attribute: under the AES the keybag read as garbage ("FATAL KEYBAG ERROR: kb_load", launchd
+  rebooted to recovery). `it_install` now protects the volume before mounting it, formats the effaceable
+  storage before the mount (a protected volume mounted before the keystore has its lockers refuses every
+  file creation, EPERM; `_MKBKeyBagCreateSystem: Can't save the bag`), then creates the keybag and the
+  rest, as a restore does. `ios_prep.py` refuses the install boot on a v1 store: such a unit is made
+  again (`device delete`, `device create`).
+- Checked on a new v2 unit over the GL bridge (`runs/n94/progress/2026-10-18_AES_*`): Setup walked, QMP
+  `quit`, the next boot at the lock screen, the home screen with the wallpaper and the whole Calendar icon.
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
