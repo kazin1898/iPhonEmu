@@ -60,9 +60,9 @@
         },
         {
           "name": "PMU D1881, I2C, sensors",
-          "percent": 80,
+          "percent": 95,
           "weight": 3,
-          "note": "ADC muxes identified, accelerometer and gyro start (nominal calibration in the kboot DT), the bq27540 gas gauge wired on uart5, battery-level property; open: which level the status bar shows (full on Setup at 30%), wake-by-button STAT bits"
+          "note": "ADC muxes identified; accelerometer and gyro start (nominal calibration in the kboot DT); bq27540 gauge on uart5; the level iOS reports (lockdown: 53% at battery-level 50, charging) follows vbat through the kext's own battery curve; open: wake-by-button STAT bits (sleep is not exercised on a USB host)"
         },
         {
           "name": "DMA (CDMA) and crypto (AES, SHA, PKE)",
@@ -72,9 +72,9 @@
         },
         {
           "name": "USB (OTG device, EHCI/OHCI, HSIC)",
-          "percent": 35,
+          "percent": 100,
           "weight": 2,
-          "note": "blocks wired, OTG enumerates endpoints; usbmux/AFC and HSIC devices pending"
+          "note": "tools/dev/usbmux_bridge.py: the host's usbmuxd over the fork's tcp_usb link, started by device boot; ideviceinfo (paired, SSL with tools/dev/openssl-ios6.cnf) shows ProductVersion 6.1.3, AFC round-trips files; HSIC radios absent cleanly (DEVICE_READY low, bounded retries)"
         }
       ]
     },

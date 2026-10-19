@@ -164,8 +164,36 @@ def qemu_env():
     return env
 
 
-def machine(kboot, nand):
-    return ["-M", f"iPhone-4S,kboot={fwd(kboot)},nand={fwd(nand)}"]
+def machine(kboot, nand, usb=None):
+    return ["-M", f"iPhone-4S,kboot={fwd(kboot)},nand={fwd(nand)}" + (f",usb-tcp-addr={usb}" if usb else "")]
+
+
+USB_LINK = "127.0.0.1:1235"          # where QEMU's tcp_usb link dials the bridge
+USBMUXD = ("127.0.0.1", 27015)       # where libimobiledevice looks for usbmuxd on Windows
+
+
+def start_usb_bridge(dev, log=print):
+    """tools/dev/usbmux_bridge.py for dev, unless one is already serving USBMUXD: the host's usbmuxd for
+    the guest (ideviceinfo, idevicepair, AFC), pair records in <dev>/lockdown. Returns its Popen or None."""
+    import socket
+    try:
+        socket.create_connection(USBMUXD, timeout=0.5).close()
+        log(f"usbmux: a bridge already serves {USBMUXD[0]}:{USBMUXD[1]}; using it")
+        return None
+    except OSError:
+        pass
+    bridge = os.path.join(REPO, "tools", "dev", "usbmux_bridge.py")
+    out = open(os.path.join(dev.logs, "usbmux-bridge.log"), "wb")
+    kw = {}
+    if sys.platform == "win32":
+        kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    proc = subprocess.Popen([sys.executable, "-I", "-u", bridge, "--usb", USB_LINK,
+                             "--mux", "%s:%d" % USBMUXD, "--records", os.path.join(dev.dir, "lockdown")],
+                            stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, **kw)
+    out.close()
+    log(f"usbmux: bridge pid {proc.pid} on {USBMUXD[0]}:{USBMUXD[1]} (libimobiledevice tools: "
+        f"OPENSSL_CONF={os.path.join(REPO, 'tools', 'dev', 'openssl-ios6.cnf')})")
+    return proc
 
 
 def fwd(path):
@@ -270,14 +298,17 @@ def run_install_boot(dev, limit, log=print, poll=2.0):
     return result, time.time() - t0
 
 
-def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False):
-    """The normal boot: dev's kboot.bin on dev's store, QMP on qmp and qmp + 1 (tools/dev/n94_input.py).
-    Waits for QEMU to exit (the window closed, or `n94_input.py quit`) unless detach; returns its exit
-    status, or its PID when detached."""
+def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=True):
+    """The normal boot: dev's kboot.bin on dev's store, QMP on qmp and qmp + 1 (tools/dev/n94_input.py),
+    and with usb the USB link to a usbmux bridge (start_usb_bridge), so the host's libimobiledevice
+    reaches the unit. Waits for QEMU to exit (the window closed, or `n94_input.py quit`) unless detach;
+    returns its exit status, or its PID when detached."""
     os.makedirs(dev.logs, exist_ok=True)
     serial = serial or "file:" + fwd(os.path.join(dev.logs, "serial.log"))
-    cmd = [qemu_exe()] + machine(dev.kboot, dev.nand) + ["-serial", serial, "-display", display,
-                                                          "-monitor", "none"]
+    if usb:
+        start_usb_bridge(dev)
+    cmd = [qemu_exe()] + machine(dev.kboot, dev.nand, USB_LINK if usb else None) + [
+        "-serial", serial, "-display", display, "-monitor", "none"]
     if qmp:
         for port in (qmp, qmp + 1):
             cmd += ["-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"]

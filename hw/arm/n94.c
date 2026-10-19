@@ -80,6 +80,7 @@ struct N94MachineState {
     bool mtt_seen[MT_MAX_FINGERS];
     char *kboot_path;
     char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
+    char *usb_tcp_addr;                  /* usb-tcp-addr=: the host bridge (tools/dev/usbmux_bridge.py) */
     GuestPackage pkg;                    /* the GL front end's hello, guest packages (hw/arm/guest-package.c) */
     CPUState *gl_owner;                  /* the vCPU whose host thread has the GL contexts current */
 };
@@ -623,6 +624,13 @@ static void n94_init(MachineState *machine)
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_GPIO_BASE);
     sysbus_connect_irq(sbd, 0, n94_irq(s, S5L8940_IRQ_GPIO));
+    /*
+     * The HSIC radios' DEVICE_READY inputs (DT usb-ehci/hsic-baseband function-device_ready 0x201,
+     * usb-ehci/wlan 0x307): no BCM4330 and no baseband are there to raise them, so they rest low, as on
+     * a board without the parts.
+     */
+    s5l8930_gpio_set_rest_level(dev, S5L8930_GPIO_PIN(0x201), false);
+    s5l8930_gpio_set_rest_level(dev, S5L8930_GPIO_PIN(0x307), false);
 
     /*
      * CDMA with its AES filter: the A4 model at the A5's addresses (same layout,
@@ -759,7 +767,7 @@ static void n94_init(MachineState *machine)
 
         dev = ipod_touch_init_usb_otg(n94_irq(s, S5L8940_IRQ_USB_OTG), hwcfg);
         s->usb_otg = S5L8900USBOTG(dev);
-        synopsys_usb_set_tcp_addr(s->usb_otg, NULL);
+        synopsys_usb_set_tcp_addr(s->usb_otg, s->usb_tcp_addr);
         s->usb_otg->builtin_host = !s->usb_otg->server_host && !getenv("IT_USB_TCP");
         s->usb_otg->host_charge = true;
         s->usb_otg->withhold_charge = false;
@@ -921,19 +929,25 @@ static void n94_set_nand(Object *obj, const char *value, Error **errp)
 }
 
 /*
- * The battery's state of charge goes to the gas gauge and to the D1881's battery voltage (ADC mux 4,
- * which AppleD1881PMUPowerSource reads at boot and looks up in its battery-data curve, family 3: 4037 mV
- * read ~80% and 3500 mV ~2%, so a line through those two, clamped at 3500-4200 mV). configd's
- * AppleHDQGasGauge reads the gauge's firmware version at start and then waits for something that was
- * not seen to come in six minutes. Which of the two the status bar shows is not settled: on the Setup
- * screen the charging battery reads full at 30% either way (docs/n94/hardware.md "PMU and sensors").
+ * The battery's state of charge goes to the gas gauge and to the D1881's battery voltage (ADC mux 4).
+ * The level the guest shows (lockdown's BatteryCurrentCapacity, the status bar) is AppleD1881PMUPowerSource's
+ * look-up of that voltage, read at boot, in its battery-data curve for the charger node's battery-family 3
+ * (the "0003-default" entry of the kext's IOKit personality, 10B329): the voltages below, at 0, 5, 10 ...
+ * 100 %, interpolated from that curve's own points. So the level is set by the voltage at boot; a change at
+ * run time reaches the gauge, which configd's AppleHDQGasGauge only reads at start (its firmware version).
  */
+static const uint16_t n94_battery_curve_mv[21] = {
+    3000, 3707, 3747, 3770, 3790, 3800, 3814, 3824, 3838, 3853, 3877,
+    3888, 3918, 3947, 3977, 4008, 4037, 4082, 4122, 4150, 4200,
+};
+
 static void n94_battery_update(N94MachineState *s)
 {
-    int mv = 3500 + (s->battery_level - 2) * (4037 - 3500) / (80 - 2);
+    int lo = MIN(s->battery_level / 5, 19), frac = s->battery_level - lo * 5;
+    int mv = n94_battery_curve_mv[lo] + (n94_battery_curve_mv[lo + 1] - n94_battery_curve_mv[lo]) * frac / 5;
 
     if (s->pmu) {
-        object_property_set_uint(s->pmu, "vbat-mv", MIN(MAX(mv, 3500), 4200), &error_abort);
+        object_property_set_uint(s->pmu, "vbat-mv", mv, &error_abort);
     }
     if (s->gauge) {
         s5l8930_hdq_set_battery(s->gauge, s->battery_level, true);
@@ -969,10 +983,24 @@ static void n94_instance_init(Object *obj)
     guest_pkg_init(&N94_MACHINE(obj)->pkg, obj);
 }
 
+static char *n94_get_usb_tcp_addr(Object *obj, Error **errp)
+{
+    return g_strdup(N94_MACHINE(obj)->usb_tcp_addr);
+}
+
+static void n94_set_usb_tcp_addr(Object *obj, const char *value, Error **errp)
+{
+    N94MachineState *s = N94_MACHINE(obj);
+
+    g_free(s->usb_tcp_addr);
+    s->usb_tcp_addr = g_strdup(value);
+}
+
 static void n94_instance_finalize(Object *obj)
 {
     g_free(N94_MACHINE(obj)->kboot_path);
     g_free(N94_MACHINE(obj)->nand_path);
+    g_free(N94_MACHINE(obj)->usb_tcp_addr);
 }
 
 static void n94_class_init(ObjectClass *klass, const void *data)
@@ -998,6 +1026,10 @@ static void n94_class_init(ObjectClass *klass, const void *data)
     object_class_property_set_description(klass, "battery-level",
         "the gas gauge's state of charge, 0-100 (default 80); settable at run time over QMP qom-set");
     object_class_property_add_str(klass, "nand", n94_get_nand, n94_set_nand);
+    object_class_property_add_str(klass, "usb-tcp-addr", n94_get_usb_tcp_addr, n94_set_usb_tcp_addr);
+    object_class_property_set_description(klass, "usb-tcp-addr",
+        "the host's usbmux bridge, host:port (tools/dev/usbmux_bridge.py; default port 1235); unset = "
+        "IT_USB_TCP, else the built-in host that only enumerates");
     object_class_property_set_description(klass, "nand",
         "PPN page-store directory (geometry.json + ch<n>-ce<m>.pages, tools/ios-prep nand); blank chips if unset");
 }

@@ -114,7 +114,12 @@ repository. Each command takes it.
 
 `device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [--cpus 1|2] [-- QEMU ARGS]` runs `-M
 iPhone-4S,kboot=<dev>/kboot.bin,nand=<dev>/nand -smp 2` (the A5's two Cortex-A9s, hardware.md "SMP"; `--cpus 1`
-rebuilds the bundle for one core, and back), with the serial log in `<dev>/logs/serial.log`. It
+rebuilds the bundle for one core, and back), with the serial log in `<dev>/logs/serial.log`, and the USB
+link to `tools/dev/usbmux_bridge.py`, which it starts (unless one already serves 127.0.0.1:27015; `--no-usb`
+for neither): the host's libimobiledevice then sees the unit (`idevice_id -l`, `idevicepair pair`,
+`ideviceinfo` with `OPENSSL_CONF=tools/dev/openssl-ios6.cnf`; hardware.md "USB: the host"). The battery's
+level is the machine's `battery-level` property as the guest boots (default 80; read once by iOS at boot,
+hardware.md "PMU and sensors"). It
 opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh` does. On the devices measured below, the first boot showed Setup's welcome screen within 4 minutes (M3's
 first boot had a 14-minute data migration first). Setup goes on to the home screen with no activation
 page ("Activation").

@@ -566,7 +566,7 @@ def cmd_device_boot(args):
     log(f"booting {args.name!r} ({meta['product']} {meta['version']} {meta['build']}, {meta['storage_gib']} GiB); "
         f"serial log {os.path.join(dev.logs, 'serial.log')}"
         + (f"; QMP on {args.qmp} and {args.qmp + 1} (tools/dev/n94_input.py --port)" if args.qmp else ""))
-    rc = device.boot(dev, display=args.display, qmp=args.qmp, extra=extra, detach=args.detach)
+    rc = device.boot(dev, display=args.display, qmp=args.qmp, extra=extra, detach=args.detach, usb=not args.no_usb)
     log(f"QEMU pid {rc}, detached" if args.detach else f"QEMU exit {rc}")
 
 
@@ -637,6 +637,9 @@ def add_device_parsers(sub):
     q.add_argument("--qmp", type=int, default=4444,
                    help="QMP on this TCP port and the next (tools/dev/n94_input.py; default 4444, 0 for none)")
     q.add_argument("--detach", action="store_true", help="return once QEMU has started")
+    q.add_argument("--no-usb", action="store_true",
+                   help="no USB link to the host (by default tools/dev/usbmux_bridge.py serves usbmuxd on "
+                        "127.0.0.1:27015 for libimobiledevice, the cable as a Mac's charging port)")
     q.add_argument("--cpus", type=int, choices=(1, 2), default=DEVICE_CPUS,
                    help=f"cores (default {DEVICE_CPUS}, as the A5; the bundle is rebuilt when it shows another count)")
     q.set_defaults(fn=cmd_device_boot)     # more QEMU arguments after a lone --

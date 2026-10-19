@@ -146,9 +146,9 @@ does not fit in 512 MiB: the disk has to come through the NAND model (or a trimm
 | i2c1 | 0x33300000 | 19 | same | `compass,akm8975b` @0x0d (A4 AK8975 model), `als,tsl2581` @0x49 (A4 model). |
 | i2c2 | 0x33400000 | 20 | same | `accelerometer,lis331dlh` @0x19 (the iPod LIS302DL model, WHO_AM_I 0x32), `gyro,ap3gdl` @0x6a (A4 L3G4200D model, ID 0xd3) and @0x68 (the DT's alternative address, empty as on a unit with its gyro at 0x6a). Both start since the kboot DT carries a nominal calibration ("PMU and sensors"). |
 | otgphyctrl | 0x36000000 | | `otgphyctrl,s5l8940x|s5l8930x` | **A4** `ipod_touch_usb_phys.c`, wired. |
-| usb-complex | 0x3F108000; ranges -> 0x36100000+0x600000 | | `usb-complex,s5l8940x|s5l8930x` | **A4** models wired: usb-device 0x36100000 (AIC 11, the iPod Synopsys OTG with the A4 GHWCFG; `AppleSynopsysOTGDevice` finds 7+7 endpoints), usb-ehci 0x36400000 (AIC 12, `exynos4210-ehci`; its second window 0x36700000 stays unimplemented), usb-ohci0 0x36500000 (AIC 13), usb-ohci1 0x36600000 (AIC 14). USB_CTL at 0x3F108000 stays in the unimplemented window. |
-| usb-ehci/wlan | HSIC port | GPIO 0x1f | | **new**: Wi-Fi is a BCM4330 over HSIC (`AppleBCMWLANBusInterfaceHSIC`), not the A4's SDIO card. There is no `sdio` node. |
-| usb-ehci/hsic-baseband | HSIC port | GPIO 0x11 | | baseband over HSIC (`AppleBasebandN94`, `AppleBasebandUSB`); the DT `baseband` node is `baseband,n94`. **hide** at boot as the A4 boards do (`baseband=off`). |
+| usb-complex | 0x3F108000; ranges -> 0x36100000+0x600000 | | `usb-complex,s5l8940x|s5l8930x` | **A4** models wired: usb-device 0x36100000 (AIC 11, the iPod Synopsys OTG with the A4 GHWCFG; `AppleSynopsysOTGDevice` finds 7+7 endpoints; the host reaches it through `tools/dev/usbmux_bridge.py`, "USB: the host" below), usb-ehci 0x36400000 (AIC 12, `exynos4210-ehci`; its second window 0x36700000 stays unimplemented), usb-ohci0 0x36500000 (AIC 13), usb-ohci1 0x36600000 (AIC 14). USB_CTL at 0x3F108000 stays in the unimplemented window. |
+| usb-ehci/wlan | HSIC port | GPIO 0x1f | | **new**: Wi-Fi is a BCM4330 over HSIC (`AppleBCMWLANBusInterfaceHSIC`), not the A4's SDIO card. There is no `sdio` node. Absent: its DEVICE_READY (GPIO 0x307) rests low and the port stays empty; the driver resets the chip three times and gives up. |
+| usb-ehci/hsic-baseband | HSIC port | GPIO 0x11 | | baseband over HSIC (`AppleBasebandN94`, `AppleBasebandUSB`); the DT `baseband` node is `baseband,n94`. Absent: DEVICE_READY (GPIO 0x201) rests low, the port stays empty (`device has not connected after 1500ms`, then the port powers down). |
 
 ## Display and media
 
@@ -706,6 +706,34 @@ and i2s-switch blocks). Decoded from the 10B329 kexts (Ghidra):
   `hclk` ones and the peripheral clock (100 MHz) elsewhere. The real 4S values come from iBoot's PLL setup
   and are not known here (no public ioreg dump was found); nothing the models do depends on them.
 
+## USB: the host (2026-10-19)
+
+`tools/dev/usbmux_bridge.py` is the host side of the fork's tcp_usb transport (`docs/tcp-usb-protocol.md`),
+written for Windows, where there is no usbmuxd: QEMU's OTG model dials it (`-M iPhone-4S,usb-tcp-addr=
+127.0.0.1:1235`, or `IT_USB_TCP`), and it serves usbmuxd's client protocol on 127.0.0.1:27015, where the
+libimobiledevice tools (MSYS2's `mingw-w64-ucrt-x86_64-libimobiledevice` 1.3.0) look for it. `device boot`
+starts it and wires the link by default (`--no-usb` for neither). What it took:
+
+- **Enumeration** as the built-in host model does it: tcp_usb hello (v1, max transaction 32767), reset and
+  enumdone until the guest answers GET_DESCRIPTOR (it NAKs for the first ~60 s of a boot), SET_ADDRESS,
+  each configuration until the one with the mux interface 255/254/2 (configuration 4, "PTP + Apple Mobile
+  Device", bulk 0x85 / 0x04, 512), SET_CONFIGURATION, Apple's vendor power request 0x40/0x40 (500 + 1600
+  mA, a charging port), the serial string (the UDID). The device is 05ac:12a0.
+- **The mux** (usbmuxd's device.c protocol): version request, the device answers 2.0, then the v2 SETUP
+  packet (`0x07`), which starts the sequence numbers at 0 for the packets after it ("Error: detected
+  missing packet" from `AppleUSBDeviceMux` when the version packet was counted). iOS 6 sends its v2
+  headers with **magic 0**, not 0xfeedface, on data and control packets alike. A TCP per client: SYN,
+  the device's SYN|ACK, ACK, then data with its window honored and every segment acknowledged.
+- **TLS.** `idevicepair pair` works as is; the SSL session after it failed (`SSL error (-5)`): iOS 6's
+  lockdownd has no RFC 5746 secure renegotiation (`UNSAFE_LEGACY_RENEGOTIATION_DISABLED` in OpenSSL 3) and
+  signs with SHA-1. `tools/dev/openssl-ios6.cnf` (via `OPENSSL_CONF`) allows both for those tools; the
+  session then runs TLS 1.2, AES256-SHA256. Pair records and the host's BUID live in `<unit>/lockdown`.
+- **Checked** on `gl6` booted by `device boot`: `idevice_id -l` lists the UDID; `ideviceinfo` (paired,
+  SSL) shows ProductType iPhone4,1, ProductVersion 6.1.3, BuildVersion 10B329, HardwareModel N94AP,
+  ActivationState Activated; the battery domain shows the level and charging; AFC (`com.apple.afc` through
+  lockdown's StartService, a small Python client) lists the media root and round-trips 200 KB with the
+  same SHA-256.
+
 ## PMU and sensors (2026-10-19)
 
 - **Motion sensors.** iBoot copies the unit's factory calibration from syscfg into properties the IPSW DT
@@ -728,10 +756,15 @@ and i2s-switch blocks). Decoded from the 10B329 kexts (Ghidra):
   0x38144000) writes Control(FW_VERSION) at start and reads 0x0109 back ("firmware 1.09"), then made no
   other HDQ transaction in six minutes; it polls on something the kernel side was not seen to send
   (`AppleHDQGasGaugeControl` exposes the gauge's SWI line, PMU GPIO 5, and a data-log buffer).
-- **Open: the level the status bar shows.** On Setup's screen the charging battery reads full whether the
-  machine's `battery-level` is 80 or 30, with the gauge wired or not, so neither the gauge nor the vbat
-  estimate is shown as modeled. The IOPMPowerSource's properties (lockdown's battery domain) are the way
-  to settle it.
+- **The battery level.** Lockdown's battery domain (through the USB bridge) settled it: the level iOS
+  reports (`BatteryCurrentCapacity`, what the status bar draws) is AppleD1881PMUPowerSource's look-up, at
+  boot, of the vbat it reads in its `battery-data` curve, the `0003-default` entry of its IOKit
+  personality (family 3, the charger node's `battery-family`; percent and 16.16 mV pairs: 100 % 4200 mV,
+  82 % 4047, 50 % 3877, 9 % 3742, 2 % 3450, 0 % 3000). The machine's `battery-level` sets vbat from that
+  curve: 50 reads 53 %, the default 80 reads 84 %, charging. A change at run time does not reach the
+  guest (nothing re-reads vbat; the gauge is only asked its firmware version). Setup's status bar draws
+  the charging battery full whatever the level (the lock screen and home screen draw it; not seen here,
+  the test units being at Setup).
 - **Wake by button.** The DT's `wake_button_menu`/`wake_button_hold` are the PMU's `'STAT'` 0x180/0x181,
   read when the AP wakes from sleep; on a USB host's cable iOS keeps the AP awake, so this path is not
   exercised here and the model has no STAT bits for the buttons.
