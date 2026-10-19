@@ -292,6 +292,21 @@ typedef struct {
     GLenum client_state;
 } GLESArray;
 
+/*
+ * A vertex array object (OES_vertex_array_object, APPLE_vertex_array_object): what glBindVertexArray swaps
+ * in and out, the generic attributes' pointers, enables and buffers and the element buffer (not the
+ * ARRAY_BUFFER binding). The bridge fetches attributes itself at draw time (gh.attr), so a VAO is a saved
+ * copy of that state rather than a host object. iOS 6 Maps draws its map through them.
+ */
+typedef struct {
+    struct {
+        uint32_t enabled, size, type, stride, ptr;
+        GLESBuffer *vbo;
+        bool normalized;
+    } at[GLES_MAX_ATTRIBS];
+    GLESBuffer *ebo;
+} GLESVao;
+
 typedef struct {
     uint32_t base, stride, width, height, format, uv, uvstride;
     GLenum target;
@@ -556,6 +571,9 @@ typedef struct {
     GLESArray attr[GLES_MAX_ATTRIBS];
     bool attr_normalized[GLES_MAX_ATTRIBS];
     GLuint program;             /* guest id; nonzero = ES 2.0 draws */
+    GHashTable *vaos;           /* vertex array objects: name -> GLESVao (per context, as in GL) */
+    GLESVao vao0;               /* the default one's state while another is bound */
+    uint32_t vao_bound, vao_next;
     GHashTable *glsl;           /* shader/program names, without a group */
     uint32_t glsl_next;
     GHashTable *uloc;
@@ -5103,8 +5121,51 @@ static char *gles_es2_string(CPUState *cpu, uint32_t ptr, int32_t len)
 static char *gles_es2_glsl(const char *src)
 {
 #ifdef GLES_HOST_ANGLE
-    /* ANGLE's ES2 context compiles ES GLSL 1.00 itself. */
-    return g_strdup(src);
+    /*
+     * ANGLE's ES2 context compiles ES GLSL 1.00 itself, and holds to ESSL1's rule that an #extension comes before
+     * any non-preprocessor token; Apple's compiler takes one anywhere (iOS 6 Maps' shaders put
+     * GL_OES_standard_derivatives after their precision statements). The #extension lines go to the top, after a
+     * #version, and leave blank lines behind so the rest keeps its line numbers (one inside an #if stays put).
+     */
+    {
+        GString *head = g_string_new(NULL), *body = g_string_new(NULL);
+        const char *ln = src;
+        int depth = 0;
+
+        while (*ln) {
+            const char *eol = strchr(ln, '\n');
+            size_t n = eol ? (size_t)(eol - ln + 1) : strlen(ln);
+            const char *t = ln;
+
+            while (t < ln + n && (*t == ' ' || *t == '\t')) {
+                t++;
+            }
+            if (!strncmp(t, "#version", 8)) {
+                g_string_prepend_len(head, ln, n);
+                if (!eol) {
+                    g_string_append_c(head, '\n');
+                }
+                g_string_append_c(body, '\n');
+            } else if (!strncmp(t, "#extension", 10) && !depth) {
+                g_string_append_len(head, ln, n);
+                if (!eol) {
+                    g_string_append_c(head, '\n');
+                }
+                g_string_append_c(body, '\n');
+            } else {
+                if (!strncmp(t, "#if", 3)) {
+                    depth++;
+                } else if (!strncmp(t, "#endif", 6) && depth) {
+                    depth--;
+                }
+                g_string_append_len(body, ln, n);
+            }
+            ln += n;
+        }
+        g_string_append(head, body->str);
+        g_string_free(body, true);
+        return g_string_free(head, false);
+    }
 #endif
     GString *out = g_string_new("#version 120\n"
                                 "#define lowp\n#define mediump\n#define highp\n#define ES_GL_ES 1\n");
@@ -5452,6 +5513,63 @@ static GLint gles_uloc_guest(uint32_t program, GLint host)
 
 /* The ES 2.0 slots. False means "not an ES 2.0 slot", for the caller's
  * unhandled-slot warning. */
+static void gles_vao_free(gpointer p)
+{
+    GLESVao *v = p;
+
+    for (unsigned i = 0; i < GLES_MAX_ATTRIBS; i++) {
+        gles_buffer_destroy(v->at[i].vbo);
+    }
+    gles_buffer_destroy(v->ebo);
+    g_free(v);
+}
+
+/* The VAO with this name (0: the default one's saved state), NULL if never made; makes the table. */
+static GLESVao *gles_vao(uint32_t name)
+{
+    if (!gh.vaos) {
+        gh.vaos = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, gles_vao_free);
+    }
+    return name ? g_hash_table_lookup(gh.vaos, GUINT_TO_POINTER(name)) : &gh.vao0;
+}
+
+/* glBindVertexArray: the attribute state goes into the bound VAO and the named one's comes out. */
+static void gles_vao_bind(uint32_t name)
+{
+    GLESVao *from = gles_vao(gh.vao_bound), *to = gles_vao(name);
+
+    if (name == gh.vao_bound) {
+        return;
+    }
+    if (!to) {                  /* bound before generated: ES says INVALID_OPERATION, Apple's made it */
+        to = g_new0(GLESVao, 1);
+        g_hash_table_insert(gh.vaos, GUINT_TO_POINTER(name), to);
+    }
+    if (from) {
+        for (unsigned i = 0; i < GLES_MAX_ATTRIBS; i++) {
+            from->at[i].enabled = gh.attr[i].enabled;
+            from->at[i].size = gh.attr[i].size;
+            from->at[i].type = gh.attr[i].type;
+            from->at[i].stride = gh.attr[i].stride;
+            from->at[i].ptr = gh.attr[i].ptr;
+            from->at[i].normalized = gh.attr_normalized[i];
+            gles_buffer_bind(&from->at[i].vbo, gh.attr[i].vbo);
+        }
+        gles_buffer_bind(&from->ebo, gh.element_buffer);
+    }
+    for (unsigned i = 0; i < GLES_MAX_ATTRIBS; i++) {
+        gh.attr[i].enabled = to->at[i].enabled;
+        gh.attr[i].size = to->at[i].size;
+        gh.attr[i].type = to->at[i].type;
+        gh.attr[i].stride = to->at[i].stride;
+        gh.attr[i].ptr = to->at[i].ptr;
+        gh.attr_normalized[i] = to->at[i].normalized;
+        gles_buffer_bind(&gh.attr[i].vbo, to->at[i].vbo);
+    }
+    gles_buffer_bind(&gh.element_buffer, to->ebo);
+    gh.vao_bound = name;
+}
+
 static bool gles_es2_call(CPUState *cpu, uint32_t slot, uint32_t argc,
                           const uint32_t *ga, int64_t *r)
 {
@@ -5460,6 +5578,28 @@ static bool gles_es2_call(CPUState *cpu, uint32_t slot, uint32_t argc,
     uint32_t i, a[10] = { 0 };
 
     memcpy(a, ga, MIN(argc, 10) * sizeof(*a));
+    if (slot >= 892 && slot <= 910) {
+        /*
+         * glProgramUniform*EXT (EXT_separate_shader_objects; iOS 6 Maps): ANGLE's ES 3.0 context has no
+         * ProgramUniform, so the program goes in use for the glUniform* that matches, and back out.
+         */
+        static const uint16_t uniform_slot[] = {
+            606, 607, 608, 609, 602, 603, 604, 605,     /* 1i..4i, 1f..4f */
+            614, 615, 616, 617, 610, 611, 612, 613,     /* 1iv..4iv, 1fv..4fv */
+            618, 619, 620,                              /* Matrix2fv..4fv */
+        };
+        GLuint keep = gh.program, prog = gles_glsl_host(ga[0]);
+
+        *r = 0;
+        if (prog && argc > 1) {
+            glUseProgram(prog);
+            gh.program = ga[0];
+            gles_es2_call(cpu, uniform_slot[slot - 892], argc - 1, ga + 1, r);
+            gh.program = keep;
+            glUseProgram(keep ? gles_glsl_host(keep) : 0);
+        }
+        return true;
+    }
     switch (slot) {             /* guest shader/program ids -> host ids */
     case 593: case 598:
         a[1] = gles_glsl_host(ga[1]);
@@ -5539,6 +5679,40 @@ static bool gles_es2_call(CPUState *cpu, uint32_t slot, uint32_t argc,
     }
     case 593: glDetachShader(a[0], a[1]); break;
     case 594: *r = gles_glsl_new(glCreateShader(a[0])); break;
+
+    case 837: case 550:                         /* glBindVertexArrayOES / APPLE */
+        gles_vao_bind(a[0]);
+        break;
+    case 839: case 552: {                       /* glGenVertexArraysOES: n, uint* */
+        g_autofree uint32_t *ids = g_new0(uint32_t, MAX(a[0], 1));
+
+        gles_vao(0);                            /* makes the table */
+        for (i = 0; i < a[0] && i < 4096; i++) {
+            ids[i] = ++gh.vao_next;
+            g_hash_table_insert(gh.vaos, GUINT_TO_POINTER(ids[i]), g_new0(GLESVao, 1));
+        }
+        gles_es2_write(cpu, a[1], ids, 4 * i);
+        break;
+    }
+    case 838: case 551: {                       /* glDeleteVertexArraysOES: n, const uint* */
+        g_autofree uint32_t *ids = a[0] ? gles_es2_fetch(cpu, a[1], a[0]) : NULL;
+
+        for (i = 0; ids && i < a[0]; i++) {
+            if (!ids[i]) {
+                continue;
+            }
+            if (ids[i] == gh.vao_bound) {
+                gles_vao_bind(0);
+            }
+            if (gh.vaos) {
+                g_hash_table_remove(gh.vaos, GUINT_TO_POINTER(ids[i]));
+            }
+        }
+        break;
+    }
+    case 840: case 553:                         /* glIsVertexArrayOES */
+        *r = a[0] && gh.vaos && g_hash_table_contains(gh.vaos, GUINT_TO_POINTER(a[0]));
+        break;
     case 595: {                                 /* shader, count, char**, int* */
         g_autofree uint32_t *strs = gles_es2_fetch(cpu, a[2], a[1]);
         g_autofree int32_t *lens = a[3] ? gles_es2_fetch(cpu, a[3], a[1]) : NULL;
@@ -7738,6 +7912,11 @@ static void gles_context_free(GLESHost *state)
     if (state->fbo_drawable) g_hash_table_destroy(state->fbo_drawable);
     if (state->glsl) g_hash_table_destroy(state->glsl);
     if (state->uloc) g_hash_table_destroy(state->uloc);
+    if (state->vaos) g_hash_table_destroy(state->vaos);
+    for (unsigned i = 0; i < GLES_MAX_ATTRIBS; i++) {
+        gles_buffer_destroy(state->vao0.at[i].vbo);
+    }
+    gles_buffer_destroy(state->vao0.ebo);
     if (state->cgl) {
         CGLSetCurrentContext(state->cgl);
         glDeleteFramebuffersEXT(1, &state->fbo);

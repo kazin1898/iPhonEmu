@@ -83,15 +83,15 @@
       "items": [
         {
           "name": "Display pipe + CLCD + MIPI-DSI, 640x960 panel",
-          "percent": 85,
+          "percent": 100,
           "weight": 5,
-          "note": "Setup, lock and home screens on the panel: AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; the panel's SAC wakes it after auto-lock; RGBOUT/TV-out open"
+          "note": "Setup, lock and home screens and the apps on the 640x960 panel; the backlight from the DWI dims the output (Ajustes > Brilho); the window turns with the accelerometer (landscape apps upright, touch mapped back); the CLCD's third window, RGBOUT, TV-out, the scalers and the JPEG block with no unmodeled access (AppleTVOut stops on the IPSW's own DT, as on a phone)"
         },
         {
           "name": "GPU: GL bridge on Windows (ANGLE)",
-          "percent": 60,
+          "percent": 100,
           "weight": 6,
-          "note": "CoreAnimation composites through ANGLE/D3D11: Setup, the lock screen and the home screen with its wallpaper (2026-10-18), frame writeback asynchronous (3.9 -> 1.6 ms/frame on the host); open: the speed-up over software measured, the stock apps on it"
+          "note": "CoreAnimation and the apps' own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page swipes 44 vs 15 frames/s, host CPU 22-26 vs 109-114 ms a frame, app openings 21-29 vs 7-15 frames/s; the default of prepare/device create (--software-gl to opt out)"
         },
         {
           "name": "Multitouch (SPI) and buttons",
@@ -101,9 +101,9 @@
         },
         {
           "name": "Audio (I2S, CS42L63, AE2)",
-          "percent": 45,
+          "percent": 95,
           "weight": 2,
-          "note": "AE2 coprocessor modeled high-level, its sleep/restart cycles answered (the ring index kept across restarts: mediaserverd no longer hangs and gets killed after system sounds), I2S blocks, codec and Highland Park start; no PCM to the host yet, AE2 audio endpoints unread"
+          "note": "PCM from AppleARMIISAudio over CDMA 0x1f and i2s0 to the host (-audiodev dsound by default, wav to record): lock, unlock and keyboard clicks recorded; volume buttons scale it; codec and i2s-switch as register files; the AE2's rings 2-7 (FairPlay AAC decoder, WFI endpoint) left out by design"
         }
       ]
     },

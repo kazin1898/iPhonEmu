@@ -197,10 +197,76 @@ push and a Back, dumped and compared (each one's horizontal shift against the pr
 direction throughout (a stale frame would jump back by a whole step, 20-60 px; the only reverse shift was
 2 px as the Back settled), and no frame was repeated. Settings -> Safari was not measured again.
 
+## Software against the bridge, measured (2026-10-19)
+
+The 2026-10-18 figures above came from screendumps, which disturb what they measure. These come from
+`tools/dev/n94_bench.py`: `boot` times a unit from QEMU's start to its lock screen (a screendump a second until the
+slider's knob is lit), `anim` drives the home screen and counts what the panel latched in the display's own
+`frame-timeline` (`/machine/display`, one entry per VBL in guest-virtual time, new = a swap) and the QEMU process's
+CPU time, per gesture: six page swipes of SpringBoard, then five apps opened from their icons and closed with Home.
+A launch is the tap to the last new frame of the opening (the panel quiet for 1.5 s).
+
+Two units with the same data volume: `gl6` (Setup done, its firmware with the front end installed) and `gl6sw`, a
+sparse copy of it on a copy of that firmware with `gles_frontend software` (CA_ENABLE_OGL=0 for backboardd and
+SpringBoard; apps that use GL themselves, Maps, still go through the bridge). Both on the SSD (the HDD the units
+usually live on was busy with another process's I/O, which made one boot 170 s), two cores, two runs each,
+Radeon RX 5500 XT, `runs/n94/progress/2026-10-19_GPU_software-x-ponte.png`:
+
+| | software (CA_ENABLE_OGL=0) | GL bridge | |
+|---|---|---|---|
+| boot to the lock screen | 41.1 / 37.0 s | 37.1 / 38.1 s | the same: drawing does not limit the boot |
+| home screen page swipe, frames/s | 16.2 / 15.0 | 44.1 / 44.7 | 2.9x |
+| frames latched per swipe | 15 / 14 | 32 / 33 | 2.3x |
+| host CPU per frame (swipe) | 114 / 109 ms | 22 / 26 ms | 4.6x less |
+| app opening, frames/s (5 apps) | 6.7-15.1 | 20.6-29.1 | ~2.5x |
+| host CPU per frame (opening) | 139-241 ms | 38-78 ms | ~3x less |
+| Ajustes, tap to settled | 4.57 / 4.42 s | 3.38 / 3.42 s | -1.1 s |
+| Calendário | 2.72 / 2.10 s | 1.92 / 1.82 s | -0.5 s |
+| Fotos | 2.53 / 2.47 s | 1.85 / 2.77 s | the same |
+| Safari | 2.10 / 1.97 s | 1.92 s (the other run kept animating) | the same |
+| Mapas | 3.55 / 3.44 s | 3.00 / 2.92 s | -0.5 s |
+
+The idle home screen costs 15-18 % of one host core either way. The screens are the same pixel for pixel in both
+(Ajustes, Fotos, Safari, Calendário, the home screen's second page). The bridge is now the default
+(`ios_prep.py prepare` / `device create`; "CoreAnimation by default" below).
+
+## The stock apps through the bridge (2026-10-19)
+
+Ajustes, Fotos, Safari, Calendário, Calculadora (and its scientific layout in landscape) draw as in software.
+Maps drew black: it was the first guest code to use three things the bridge refused (`[gles] UNHANDLED` in the
+host log), and its map is GL of its own, not CoreAnimation's:
+
+- **Vertex array objects** (`glGenVertexArraysOES`, `glBindVertexArrayOES`, and the APPLE spelling). The bridge
+  fetches vertex attributes from the guest itself at draw time (`gh.attr`), so a VAO is a saved copy of that state
+  (the generic attributes' pointers, enables and buffers, and the element buffer, not ARRAY_BUFFER's binding),
+  swapped in and out by the bind (`GLESVao`, `gles_vao_bind`).
+- **`glProgramUniform*EXT`** (EXT_separate_shader_objects), which ANGLE's ES 3.0 context lacks: the program goes in
+  use for the matching `glUniform*` and back out.
+- **`#extension` after code**: Maps' fragment shaders enable `GL_OES_standard_derivatives` after their precision
+  statements. Apple's compiler takes that; ANGLE holds to ESSL 1.00 ("extension directive must occur before any
+  non-preprocessor tokens") and then reports the extension disabled. The bridge moves top-level `#extension` lines
+  to the top (after a `#version`), leaving blank lines so the line numbers stay.
+
+With no network Maps now shows its grid of unloaded tiles, as a phone offline does
+(`runs/n94/progress/2026-10-19_GPU_apps-pela-ponte.png`). Left: one `glDrawElements` at boot returns
+GL_INVALID_ENUM (`[gles] REFUSED draw-error:0x500`, before the first frame; nothing visible is missing).
+
+## CoreAnimation by default
+
+`ios_prep.py prepare`, and `device create` through it, give the system volume the front end (built once into the
+firmware directory's `gles-frontend/` by `gles_frontend.py build`, installed with dyld's override switch) and no
+`CA_ENABLE_OGL`, wherever QEMU has the bridge (on Windows, MSYS2's ANGLE DLLs in the workspace's toolchain; on
+macOS, CGL). `--software-gl` keeps QuartzCore's software renderer (`CA_ENABLE_OGL=0`, `gles_frontend software`), as
+does a host without the bridge. Each run is idempotent (the build is reproducible: an install over the same bytes is
+"already in place"). A firmware directory that was in software changes its system volume the first time: units
+already made from it need `device refresh` (the FTL's copies of served pages do not follow an edit). Checked
+2026-10-19: `device create` of a new 4 GiB unit from the IPSW on the shared `firmware/n94_10B329`, first boot to
+Setup's welcome page in 71 s on the SSD, `[gles] CoreAnimation composites through the host` in its log.
+
 ## Limitations
 
 - Windows only with Direct3D 11 (ANGLE's default here); the Vulkan and SwiftShader backends in the package are not
   selected.
 - No GL snapshots (savevm/migration) while a guest GL context is live.
 - `gles_frontend install` edits a system volume image every unit of that firmware shares; a unit that should stay
-  in software needs its own image or `gles_frontend software`.
+  in software needs its own firmware directory (`prepare --software-gl`).

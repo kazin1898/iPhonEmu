@@ -296,10 +296,45 @@ def firmware_edits(rootfs, args):
         changed = sysvol.unit_edits(rootfs)
         rec["unit_edits"] = [f"{', '.join(jobs)}: {kw}" for jobs, kw in sysvol.UNIT_EDITS]
         log("launchd jobs: " + (f"{', '.join(changed)} edited" if changed else "already as every unit needs them")
-            + " (CA_ENABLE_OGL=0 for backboardd and SpringBoard, BTServer and BlueTool disabled)")
+            + " (BTServer and BlueTool disabled)")
+        rec["coreanimation"] = coreanimation(rootfs, getattr(args, "software_gl", False))
         rec["audio_session_timeout"] = sysvol.audio_session_timeout(rootfs)
         log(f"shared cache: {rec['audio_session_timeout']}")
     return rec
+
+
+def gl_bridge_host():
+    """Whether this host's QEMU runs the guest's GL (hw/arm/gles-host.c): on Windows the build links ANGLE
+    when MSYS2's angleproject is installed (docs/windows-gl.md), whose DLLs QEMU then loads; macOS has CGL."""
+    if sys.platform == "darwin":
+        return True
+    if sys.platform == "win32":
+        ucrt = os.path.join(HERE, "..", "..", "..", "toolchain", "msys64", "ucrt64", "bin")
+        return all(os.path.exists(os.path.join(ucrt, n)) for n in ("libEGL.dll", "libGLESv2.dll"))
+    return False
+
+
+def coreanimation(rootfs, software=False):
+    """How backboardd's and SpringBoard's CoreAnimation renders, for every unit of this system volume: through
+    the GL bridge (the front end, contrib/gles-public, built once into the firmware directory's gles-frontend/ by
+    gles_frontend.py and installed with dyld's override switch), measured faster than QuartzCore's software
+    renderer and drawing the same (docs/windows-gl.md, "Software against the bridge"); or in software
+    (CA_ENABLE_OGL=0) with --software-gl or on a host whose QEMU has no bridge. Idempotent."""
+    import gles_frontend
+    if software or not gl_bridge_host():
+        jobs = gles_frontend.software(rootfs)
+        why = "--software-gl" if software else "no GL bridge on this host"
+        log(f"CoreAnimation: software (CA_ENABLE_OGL=0, {why})")
+        return {"renderer": "software", "jobs": jobs}
+    out = os.path.join(os.path.dirname(os.path.abspath(rootfs)), "gles-frontend")
+    lib = os.path.join(out, "OpenGLES")
+    src = os.path.join(HERE, "..", "..", "contrib", "gles-public", "opengles.c")
+    if not os.path.exists(lib) or os.path.getmtime(lib) < os.path.getmtime(src):
+        path, info = gles_frontend.build(out)
+        log(f"GL front end: {path}, {info['bytes']} bytes, {info['exports']} exports")
+    rep = gles_frontend.install(rootfs, lib)
+    log(f"CoreAnimation: the GL bridge (front end {rep['OpenGLES']}, override switch {rep['override switch']})")
+    return {"renderer": "gl-bridge", **rep}
 
 
 def activation_shortcut(rootfs):
@@ -428,7 +463,8 @@ def ensure_firmware(args, ip):
         log(f"firmware: preparing {fw} from {os.path.basename(args.ipsw)}")
         cmd_prepare(argparse.Namespace(
             ipsw=args.ipsw, out=fw, keys=args.keys, skip_rootfs=False, redo_rootfs=False, keep_dmg=False,
-            stock_lockdownd=args.stock_lockdownd, stock_jobs=args.stock_jobs, docs=None, cpus=1, nand="ppn",
+            stock_lockdownd=args.stock_lockdownd, stock_jobs=args.stock_jobs,
+            software_gl=getattr(args, "software_gl", False), docs=None, cpus=1, nand="ppn",
             boot_args=None, verbose_boot=False, add_boot_arg=None, hide=None, ramdisk=None, ramdisk_file=None,
             bundle=None, seed=DEFAULT_SEED))
         return fw
@@ -626,6 +662,8 @@ def add_device_parsers(sub):
     q.add_argument("--keys", help="keys JSON (else cached beside the IPSW, else The Apple Wiki)")
     q.add_argument("--stock-lockdownd", action="store_true", help="as for prepare: no activation short-circuit")
     q.add_argument("--stock-jobs", action="store_true", help="as for prepare: no M3 launchd edits")
+    q.add_argument("--software-gl", action="store_true",
+                   help="as for prepare: CoreAnimation in software, not through the GL bridge")
     install_opts(q)
     q.set_defaults(fn=cmd_device_create)
     q = parser("refresh", "the install boot again (markers rewritten, data volume kept)")
@@ -693,8 +731,11 @@ def main():
                    help="leave lockdownd as the IPSW has it (by default it takes its activation short-circuit, "
                         "lockdownd_patch.py, so a new unit gets past Setup's activation page)")
     p.add_argument("--stock-jobs", action="store_true",
-                   help="leave the launchd jobs as the IPSW has them (by default backboardd and SpringBoard get "
-                        "CA_ENABLE_OGL=0 and BTServer/BlueTool are disabled, sysvol.UNIT_EDITS)")
+                   help="leave the launchd jobs as the IPSW has them (by default BTServer/BlueTool are disabled, "
+                        "sysvol.UNIT_EDITS, and CoreAnimation goes through the GL bridge)")
+    p.add_argument("--software-gl", action="store_true",
+                   help="CoreAnimation in QuartzCore's software renderer (CA_ENABLE_OGL=0) instead of the GL bridge "
+                        "(the default where QEMU has one: ANGLE on Windows, docs/windows-gl.md)")
     add_kboot_opts(p)
     p.set_defaults(fn=cmd_prepare)
     p = sub.add_parser("kboot")

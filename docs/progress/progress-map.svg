@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 72.2% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 78.6% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -157,10 +157,10 @@
 <rect x="485" y="433" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="506" y="433" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="527" y="433" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="548" y="433" width="18" height="16" rx="3" fill="#7bd389"/>
-<rect x="569" y="433" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="446" fill="#e6edf3" font-weight="600">85%</text>
-<text x="642" y="446" fill="#8b949e" font-size="12">Setup, lock and home screens on the panel: AppleCLCD adopts the framebuffer, CoreAnimation (software, or the GL bridge) swaps through the A5 layer MMU; the panel&#x27;s SAC wakes it after auto-lock; RGBOUT/TV-out open</text>
+<rect x="548" y="433" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="433" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="446" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="446" fill="#8b949e" font-size="12">Setup, lock and home screens and the apps on the 640x960 panel; the backlight from the DWI dims the output (Ajustes &gt; Brilho); the window turns with the accelerometer (landscape apps upright, touch mapped back); the CLCD&#x27;s third window, RGBOUT, TV-out, the scalers and the JPEG block with no unmodeled access (AppleTVOut stops on the IPSW&#x27;s own DT, as on a phone)</text>
 <text x="36" y="472" fill="#e6edf3">GPU: GL bridge on Windows (ANGLE)</text>
 <rect x="380" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -168,12 +168,12 @@
 <rect x="443" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="464" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="485" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="506" y="459" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="527" y="459" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="548" y="459" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="569" y="459" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="472" fill="#e6edf3" font-weight="600">60%</text>
-<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation composites through ANGLE/D3D11: Setup, the lock screen and the home screen with its wallpaper (2026-10-18), frame writeback asynchronous (3.9 -&gt; 1.6 ms/frame on the host); open: the speed-up over software measured, the stock apps on it</text>
+<rect x="506" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="472" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation and the apps&#x27; own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page swipes 44 vs 15 frames/s, host CPU 22-26 vs 109-114 ms a frame, app openings 21-29 vs 7-15 frames/s; the default of prepare/device create (--software-gl to opt out)</text>
 <text x="36" y="498" fill="#e6edf3">Multitouch (SPI) and buttons</text>
 <rect x="380" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -192,14 +192,14 @@
 <rect x="401" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="422" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="443" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="464" y="511" width="18" height="16" rx="3" fill="#7bd389"/>
-<rect x="485" y="511" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="506" y="511" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="527" y="511" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="548" y="511" width="18" height="16" rx="3" fill="#30363d"/>
-<rect x="569" y="511" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="524" fill="#e6edf3" font-weight="600">45%</text>
-<text x="642" y="524" fill="#8b949e" font-size="12">AE2 coprocessor modeled high-level, its sleep/restart cycles answered (the ring index kept across restarts: mediaserverd no longer hangs and gets killed after system sounds), I2S blocks, codec and Highland Park start; no PCM to the host yet, AE2 audio endpoints unread</text>
+<rect x="464" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="485" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="506" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="527" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="548" y="511" width="18" height="16" rx="3" fill="#3fb950"/>
+<rect x="569" y="511" width="18" height="16" rx="3" fill="#7bd389"/>
+<text x="598" y="524" fill="#e6edf3" font-weight="600">95%</text>
+<text x="642" y="524" fill="#8b949e" font-size="12">PCM from AppleARMIISAudio over CDMA 0x1f and i2s0 to the host (-audiodev dsound by default, wav to record): lock, unlock and keyboard clicks recorded; volume buttons scale it; codec and i2s-switch as register files; the AE2&#x27;s rings 2-7 (FairPlay AAC decoder, WFI endpoint) left out by design</text>
 <text x="20" y="550" fill="#c9d1d9" font-weight="600">Radios (stubs)</text>
 <text x="36" y="576" fill="#e6edf3">Wi-Fi over HSIC, Bluetooth, baseband</text>
 <rect x="380" y="563" width="18" height="16" rx="3" fill="#3fb950"/>

@@ -65,10 +65,11 @@ def build(out_dir, clang=None):
     os.makedirs(out_dir, exist_ok=True)
     sh = find_sh()
     env = dict(os.environ, PATH=os.path.dirname(sh) + os.pathsep + os.environ.get("PATH", ""))
-    subprocess.run([sh, os.path.join(IT_GLES, "genstubs.sh"), os.path.join(IT_GLES, "gles_stubs.h")],
+    fwd = lambda p: os.path.abspath(p).replace("\\", "/")     # the scripts' awk takes a backslash as an escape
+    subprocess.run([sh, fwd(os.path.join(IT_GLES, "genstubs.sh")), fwd(os.path.join(IT_GLES, "gles_stubs.h"))],
                    check=True, env=env)
-    subprocess.run([sh, os.path.join(IT_GLES, "gles-exports.sh"), os.path.join(GLES_PUBLIC, "opengles.exports"),
-                    NAMES_H, out_dir], check=True, env=env)
+    subprocess.run([sh, fwd(os.path.join(IT_GLES, "gles-exports.sh")), fwd(os.path.join(GLES_PUBLIC, "opengles.exports")),
+                    fwd(NAMES_H), fwd(out_dir)], check=True, env=env)
     clang = find_tool("clang", clang)
     obj = os.path.join(out_dir, "opengles-armv7.o")
     subprocess.run([clang] + CFLAGS + ["-isystem", os.path.join(GLES_PUBLIC, "darwin-include"), "-I", out_dir,

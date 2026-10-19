@@ -13,7 +13,7 @@ in `hardware.md`; the raw inventory (`devicetree.txt`, `iomap.tsv`, `kexts.txt`)
 | M2 | `launchd` and its daemons | `runs/n94/m2-root.log` | **done** 2026-10-17: `BSD root: disk0s1` from the PPN NAND (the system volume installed by the emulator's helper, B3), `/private/var` on the data volume, launchd and the system daemons for 7 minutes with no reboot; B4 the same day: effaceable storage formatted and the system keybag created by the install boot, keybagd running (see "B4") |
 | M3 | Setup Assistant or the lock screen on the 640x960 panel | `runs/n94/progress/2026-10-18_M3_setup-assistant.png` | **done** 2026-10-18: Setup Assistant's language list at 640x960 after 22 minutes of emulated boot (the AE2 audio path, the data volume's skeleton and protection; see "M3") |
 | M4 | slide to unlock, the home screen, stock apps | `runs/n94/progress/2026-10-18_M4_tela-inicial.png` | **done** 2026-10-18: Setup walked by touch to the end, the home screen, Ajustes open, lock and slide to unlock back to the home screen (the touch and buttons, and the activation by lockdownd's short-circuit; see "Activation") |
-| GPU | CoreAnimation through the GL bridge on Windows | `runs/n94/progress/2026-10-18_GL_setup-boas-vindas-angle.png` | **done** to Setup 2026-10-18: OpenGL ES on ANGLE over Direct3D 11, Setup's welcome page drawn by the PC's GPU; no measurable speed-up yet (see "GPU") |
+| GPU | CoreAnimation through the GL bridge on Windows | `runs/n94/progress/2026-10-19_GPU_apps-pela-ponte.png` | **done** 2026-10-19: OpenGL ES on ANGLE over Direct3D 11, the home screen and the stock apps (Maps' own GL included) drawn by the PC's GPU; 2.9x the frames of software CoreAnimation at 4.6x less host CPU each, and the default of `device create` (see "GPU", docs/windows-gl.md) |
 
 ## Preparing the firmware
 
@@ -70,8 +70,10 @@ device made from this IPSW shares them. Each edit is idempotent, and an image th
 is not opened for writing:
 
 - lockdownd's activation short-circuit ("Activation" below; `--stock-lockdownd` leaves it out).
-- The M3 launchd edits, `sysvol.UNIT_EDITS` (`--stock-jobs` leaves them out): `CA_ENABLE_OGL=0` for
-  backboardd and SpringBoard, and BTServer and BlueTool disabled.
+- The M3 launchd edits, `sysvol.UNIT_EDITS` (`--stock-jobs` leaves them out): BTServer and BlueTool disabled.
+- CoreAnimation through the GL bridge: the front end (`contrib/gles-public`, built into `gles-frontend/`) and
+  dyld's override switch, where QEMU has the bridge (docs/windows-gl.md, "CoreAnimation by default");
+  `--software-gl`, or a host without it, gives backboardd and SpringBoard `CA_ENABLE_OGL=0` instead.
 - AudioToolbox's audio-session timeout in the shared cache, 5 s to 60 s (`sysvol.audio_session_timeout`,
   also left out by `--stock-jobs`): at the emulator's pace mediaserverd is not ready in 5 s at boot and
   assistantd killed itself on every boot (hardware.md "Boot: what a normal boot logs").
@@ -517,8 +519,15 @@ Setup again; panel frames dumped at every latch by a temporary hook in `front_la
   block (0x38200000) were not needed for it and stay unmodeled.
 - Setup's completion now survives a reboot on units made since then. `gl` and `m4gl` are v1 stores and
   still start at "slide to set up"; `device refresh` refuses them, `device delete` + `device create`
-  makes them anew. On a GL firmware directory, `device create` reapplies the per-firmware launchd edits,
-  `CA_ENABLE_OGL=0` included (CoreAnimation back on its software path); `--stock-jobs` skips them.
+  makes them anew. (Until 2026-10-19 `device create` put `CA_ENABLE_OGL=0` back on a GL firmware directory.)
+
+Measured against software and made the default on 2026-10-19 (docs/windows-gl.md, "Software against the bridge",
+"The stock apps through the bridge", "CoreAnimation by default"): page swipes at 44 frames/s against 15-16, a
+frame at 22-26 ms of host CPU against 109-114, app openings at 21-29 frames/s against 7-15 and up to a second
+quicker, the boot the same; the screens identical. Maps needed vertex array objects, `glProgramUniform*EXT` and
+shaders with a late `#extension`, which the bridge now serves. `ios_prep.py prepare` and `device create` install
+the front end wherever QEMU has the bridge (`--software-gl` for software); units made earlier from a firmware
+directory that was in software need `device refresh`.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

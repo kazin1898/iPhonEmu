@@ -90,11 +90,11 @@ def asl_console(rootfs, donor=DONOR):
         v.close()
 
 
-# What every unit made from a 10B329 system volume needs (docs/n94/README.md "M3"): QuartzCore's software
-# renderer for backboardd and SpringBoard (no SGX model), and the Bluetooth jobs off (BlueTool's HCI
-# traffic on uart3 ends in AppleSimpleUARTSync's assertion, a kernel panic). (jobs, edit_jobs keywords).
+# What every unit made from a 10B329 system volume needs (docs/n94/README.md "M3"): the Bluetooth jobs off
+# (BlueTool's HCI traffic on uart3 ends in AppleSimpleUARTSync's assertion, a kernel panic). (jobs,
+# edit_jobs keywords.) How CoreAnimation renders (the GL bridge, or CA_ENABLE_OGL=0 for QuartzCore's
+# software renderer) is ios_prep.coreanimation's, per firmware.
 UNIT_EDITS = (
-    (("com.apple.backboardd", "com.apple.SpringBoard"), {"env": ("CA_ENABLE_OGL=0",)}),
     (("com.apple.BTServer", "com.apple.BlueTool"), {"disabled": True}),
 )
 
