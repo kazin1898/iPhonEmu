@@ -74,6 +74,11 @@ writes `kernelcache.mach`, `DeviceTree.bin`, `iBoot.bin`, the expanded HFS+ root
 see `hw/arm/ipad1.c`), and the inventory (`devicetree.txt`, `kexts.txt`, `iomap.tsv`). Python 3 and
 the `cryptography` package are the only requirements; it runs on Windows.
 
+`ios_prep.py device create NAME --ipsw IPSW` turns that into a ready unit (docs/n94/README.md, "Virtual
+devices"). On Windows, `iphonemu.cmd` is a provisional shortcut to run one: `iphonemu` boots the default
+unit in a window, `iphonemu boot NAME` another, and `iphonemu help` lists the rest (buttons, screenshot,
+power-off).
+
 ## Building
 
 QEMU's build system is unchanged. On Windows use MSYS2's UCRT64 environment (a portable one in a

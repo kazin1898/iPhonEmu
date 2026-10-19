@@ -95,6 +95,13 @@ python iPhonEmu/tools/ios-prep/ios_prep.py device delete meu4s          # asks; 
 `--root DIR` (or `IPHONEMU_DEVICES`) says where the devices live. The default is `devices/` beside the
 repository. Each command takes it.
 
+On Windows, `iphonemu.cmd` at the repository root is a provisional shortcut over these commands and
+`tools/dev/n94_input.py`: `iphonemu` boots the default unit in an SDL window, `iphonemu boot gl6 --no-usb`
+boots another (any `device boot` option passes through), and `iphonemu list`, `home`, `power`, `wake`,
+`shot FILE.png`, `poweroff`, `stop` and `input ...` act on the running one. `IPHONEMU_DEVICES` (default
+`E:\iphonemu-gl\devices` when it exists), `IPHONEMU_UNIT` (default `gl5`) and `IPHONEMU_QMP` (default
+4444) set it up; `iphonemu help` lists it all. It adds no behaviour of its own.
+
 `device create NAME --ipsw IPSW [--storage 16G] [--firmware DIR]`:
 
 1. **Firmware.** Uses `firmware/<board>_<build>` beside the repository (`n94_10B329`), or `--firmware`.
