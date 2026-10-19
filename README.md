@@ -13,7 +13,7 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-78.6%25-brightgreen) ![milestones](https://img.shields.io/badge/milestones-4%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
+![overall](https://img.shields.io/badge/overall-83.2%25-brightgreen) ![milestones](https://img.shields.io/badge/milestones-4%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
@@ -38,7 +38,7 @@ goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_ma
 | Video and input: Multitouch (SPI) and buttons | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | Video and input: Audio (I2S, CS42L63, AE2) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
 | Radios (stubs): Wi-Fi over HSIC, Bluetooth, baseband | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 10% |
-| Product: Speed: 1:1 with a real 4S on PC | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
+| Product: Speed: 1:1 with a real 4S on PC | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
 | Product: iPhonEmu.exe (open IPSW, prepare, boot) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
 | Product: Android build (arm64 host, native GLES) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
 <!-- progress:end -->

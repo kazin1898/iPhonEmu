@@ -150,7 +150,8 @@ def qemu_alive(pid):
 
 
 def qemu_exe():
-    exe = os.path.join(REPO, "build", "qemu-system-arm" + (".exe" if sys.platform == "win32" else ""))
+    """The repository's build/qemu-system-arm, or IPHONEMU_QEMU (another build of it, e.g. one to compare)."""
+    exe = os.environ.get("IPHONEMU_QEMU") or os.path.join(REPO, "build", "qemu-system-arm" + (".exe" if sys.platform == "win32" else ""))
     if not os.path.isfile(exe):
         raise SystemExit(f"{exe}: build QEMU first (RUNNING.md)")
     return exe

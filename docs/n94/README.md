@@ -529,6 +529,47 @@ shaders with a late `#extension`, which the bridge now serves. `ios_prep.py prep
 the front end wherever QEMU has the bridge (`--software-gl` for software); units made earlier from a firmware
 directory that was in software need `device refresh`.
 
+### Speed: against a real phone (2026-10-19)
+
+The product's goal is the real 4S's pace. No published figures for a 4S on iOS 6 turned up; for the iPhone 4 on 6.1.3
+(gori.me, a video-timed comparison with 7.0): cold boot to the lock screen 31.1 s, Safari 1.13 s, Settings 1.31 s,
+Calendar 1.23 s, Mail 1.0 s, Messages 1.57 s, Camera 1.9 s, Phone 0.67 s. The 4S's A5 runs at the same 800 MHz
+with a second core and a faster GPU, so these bound a 4S from above; its UI runs at the panel's 60 Hz.
+
+Measured with `tools/dev/n94_bench.py` (docs/windows-gl.md, "Software against the bridge") on `gl6`, two cores, the
+GL bridge, the store on the SSD, four runs (`runs/n94/progress/2026-10-19_SPEED_emulador-x-aparelho.png`):
+
+| | real (iPhone 4, 6.1.3) | iPhonEmu | |
+|---|---|---|---|
+| boot to the lock screen | 31.1 s | 36.0-38.1 s | 0.82x |
+| Calendário, tap to settled | 1.23 s | 1.73-1.92 s | 0.67x |
+| Safari | 1.13 s | 1.88-1.92 s | 0.59x |
+| Ajustes | 1.31 s | 3.31-3.45 s | 0.39x |
+| home screen page swipe | 60 frames/s | 43-45 frames/s | 0.73x |
+| an app's opening | 60 frames/s | 21-30 frames/s | 0.35-0.5x |
+
+Where the host's time goes (`tools/dev/n94_profile.py`: each QEMU thread's CPU over a window, the MMIO accesses per
+region from `memory_region_ops_*`, and the GL bridge's own `gles_obj_log`):
+
+- **Idle** (a still home screen): each vCPU 7-8 % of a host core, the main loop 4 %. The guest's idle loop is
+  `wfi` and QEMU halts the vCPU there.
+- **Page swipes are not CPU-bound.** During the animation itself each vCPU runs 12-32 % of a core; the GL bridge
+  costs the host about 2 ms a frame (10 s of swipes at 25 frames/s: 184 ms in GL calls, 195 ms in the traps that
+  carry them, 130 ms of writeback); the busiest MMIO is the AIC's counter (30,000 reads/s, lockless), spi1 (the
+  digitizer, 5,200/s), the PMGR (3,600/s), the AIC (3,400/s) and the display pipe (3,400/s). The frames that miss
+  their VBL are missed while both vCPUs idle: what limits scrolling is the latency of the chain from a touch
+  through SpringBoard and backboardd to a swap and the VBL, across the two vCPUs, not instructions.
+- **A cold app launch is TCG-bound**: each vCPU 61-77 % of a core for its two seconds (a warm one, 20 %).
+- **TCG**: no translation-buffer flush in a session (412 MB of the 1 GiB buffer), 17 guest bytes to 395 of host
+  code per block (22.5x), 39 % of blocks chained directly; 2.3 million partial TLB flushes in six minutes, each a
+  cross-vCPU synchronization under MTTCG.
+- **The build is not it**: an LTO build without TCG plugins and debug info (`build-rel`, `IPHONEMU_QEMU` points
+  `device boot` at another executable) gave the same boot, swipes and launches within the run-to-run spread.
+
+What is left toward 1:1, in the order it would pay: find what each missed VBL waits on (the frame-timeline's held
+VBLs against the guest's IPIs, timers and Mach messages between SpringBoard and backboardd); then TCG throughput for
+launches (the TLB flush synchronization, the block chaining).
+
 ### Activation: lockdownd's short-circuit (2026-10-18)
 
 An emulated unit has no Apple-issued activation record (those are bound to a real unit's identity), so

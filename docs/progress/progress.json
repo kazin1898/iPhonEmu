@@ -123,9 +123,9 @@
       "items": [
         {
           "name": "Speed: 1:1 with a real 4S on PC",
-          "percent": 0,
+          "percent": 60,
           "weight": 5,
-          "note": "MTTCG, WFI, profiling; measured after M3"
+          "note": "measured 2026-10-19 against iOS 6.1.3 on an iPhone 4 (the 4S is no slower): boot 36-38 s vs 31 s (0.82x), launches 0.39-0.67x, page swipes 44 vs 60 frames/s, app openings 21-30 vs 60; swipes are latency-bound (vCPUs 12-32 % busy), cold launches TCG-bound; an LTO build changes nothing"
         },
         {
           "name": "iPhonEmu.exe (open IPSW, prepare, boot)",
