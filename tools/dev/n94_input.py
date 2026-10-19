@@ -10,7 +10,10 @@ Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top le
                                  Home, End, Page Up, Page Down)
   shot OUT.png                   screendump of the panel, converted with Pillow
   wake                           press Home if the panel is dark (Auto-Lock), then wait 3 s
-  status | quit                  QMP query-status / quit (the logs flush on quit)
+  poweroff                       iOS's own power-off: Home (lights the panel), the power button held 4 s, then
+                                 "slide to power off"; the guest shuts down, the PMU model powers off and QEMU
+                                 exits by itself (about 25 s), with the FTL flushed, unlike quit
+  status | quit                  QMP query-status / quit (the logs flush on quit; for the guest a power cut)
   wait SECS                      sleep on the host (to chain steps in one call)
   keepalive [SECS [X Y]]         tap X Y (320 85, a navigation bar's title) every SECS (20) seconds, forever;
                                  run it on the second QMP server (--port 4445); it pauses while another run is busy
@@ -120,6 +123,12 @@ def run(q, argv):
         if dark:
             run(q, ["key", "home"])
             time.sleep(3)
+    elif op == "poweroff":
+        run(q, ["key", "home"])
+        time.sleep(1.5)
+        run(q, ["key", "power", "--hold", "4000"])
+        time.sleep(1.5)
+        run(q, ["swipe", "104", "136", "620", "136", "--ms", "900"])     # the slider at the top of the panel
     elif op == "status":
         print(q.cmd("query-status"))
     elif op == "quit":

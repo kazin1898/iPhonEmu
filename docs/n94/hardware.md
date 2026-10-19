@@ -317,9 +317,9 @@ IPSW's own restore ramdisk as the trusted root and the emulator's helper where `
   KEYBAG ERROR: kb_load`, sets `auto-boot=false` and reboots into recovery 20 s after launchd starts. The
   knob lives on the emulator's data volume; the system volume stays as Apple shipped it.
 - **The halt**: `reboot(RB_HALT)` runs the kernel's shutdown (`AppleNANDFTL::systemWillShutdown`, the FTL
-  flushed) and `pmu go stdby`, after which the kernel panics (`panic(cpu 0 caller 0x80017d65)`): the D1881
-  model has no standby state. Harmless for the install boot (the run script quits on `it_install: done`);
-  the model should power the machine off there.
+  flushed) and `pmu go stdby`, after which the kernel panicked (`panic(cpu 0 caller 0x80017d65)`) while the
+  D1881 model had no standby state. Since 2026-10-19 the halt powers the machine off and QEMU exits ("Power:
+  off, restart, and a session cut short").
 
 ## Storage: effaceable storage and the system keybag (B4, 2026-10-17)
 
@@ -515,6 +515,38 @@ volume's `fsck_hfs -fy` "appears to be OK" and the keybag found. Wear per sessio
 blocks erased, 1.01-1.02 erases each on average and 2 at most, so the FTL spreads its erases. (The model
 counts erases per block for a session only; a lifetime count would need them in the store.)
 
+## Power: off, restart, and a session cut short (2026-10-19)
+
+Three ways a session ends, each checked on `gl5` (a unit past Setup) by the next boot reaching the lock
+screen with no Setup and launchd's `fsck_hfs` on both volumes saying `QUICKCHECK ONLY; FILESYSTEM CLEAN`
+(`runs/n94/progress/2026-10-19_PERSIST_desligar-reboot-kill.png`):
+
+- **"Slide to power off".** Holding the power button 4 s brings the slider; sliding it makes launchd stop
+  every job (about 21 s) and call `reboot(RB_HALT)`. The kernel then hung with the CPU idle: a gdbstub
+  look at launchd's thread (its kernel stack's saved frame chain, mapped to kexts through the prelink info)
+  showed it in IOMikeyBusFamily's shutdown under AppleCS42L63Audio, which powers the codec down (`0x06` bit
+  0) and reads `0x62` every 10 ms until bit 7 says it is down, with no limit (10B329 `0x80acbebc`). The
+  codec was the A4 boards' plain register file; it is now a `cs42l63` type of that model that sets the bit.
+  Past it, the kernel flushes the FTL (`AppleNANDFTL::systemWillShutdown`) and NVRAM and halts in the PMU
+  driver (`0x80aed7a0`): with no cable it sets `0x15` bit 0 ("pmu go stdby") and waits for the power to
+  go; with a cable, which the model always has (the D1881's VBUS), it writes `0xaf` <- 0x90 and restarts,
+  for iBoot to show the battery charging with iOS off. The D1881 model powers the machine off in both
+  cases (QEMU's guest shutdown: the process exits by itself about 25 s after the slide); a restart with no
+  halt before it (`0xaf` untouched) resets the machine as before. The next boot opens the FTL with no
+  "unclean shutdown". `tools/dev/n94_input.py poweroff` does the whole gesture.
+- **A restart asked by iOS.** Ajustes > Geral > Redefinir > Redefinir Ajustes de Rede (nothing to lose on a
+  unit with no network) ends in launchd's `reboot(RB_AUTOBOOT)`: the FTL and NVRAM flushed, `pmu restart`
+  (`0x96` <- 0x2b, no `0xaf`), the machine reset by the model, and the next boot is clean.
+- **QEMU ended with no shutdown at all** (`quit` on QMP or the monitor, the window closed, the process
+  killed): for the guest a power cut. The FTL recovers as it would from a pulled battery (`sftl: error,
+  unclean shutdown; adopted N spans`), the data volume is journaled (`newfs_hfs` gives it an 8 MiB journal,
+  mounted `journaled, protect`) and its quick check is clean, and the unit is at its lock screen.
+  `pagemap.bin` is not there after a kill and is rebuilt in the background (above).
+
+The install boot ends the same way now: `it_install`'s halt powers the machine off, and `device.py` waits
+for that (up to 90 s) instead of quitting QEMU 3 s after `it_install: done`, which had left the FTL to
+open the next boot with "unclean shutdown".
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
@@ -610,14 +642,16 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
    the offset it keeps at 0xa4) and the restart (0x96 <- 0x2b after 0xa1 <- 0, from the kernel's `pmu
    restart`, resets the machine). Its interrupt is GPIO 0x0d, active low. The driver's `ADC read bad state`
    and the 1970 date are gone; which ADC channel is what (battery, NTCs, dock) is still open, as are the
-   wake events and buttons.
+   wake events and buttons. Standby (`0x15` bit 0) and the halt-on-cable restart (`0xaf`) power the machine
+   off ("Power: off, restart, and a session cut short").
    **USB**: wired (table above); restored's `enable_usb_connections` still fails and it waits for the
    `IONVRAM` resource, which on this NOR-less board comes from the NAND's partitions.
 5. ~~I2C~~: decoded and modeled (section above).
 6. **Storage**: decided by the user on 2026-10-17 ("Storage: the decision", option B) and done through B3
    the same day: PPN through a mailbox-level IOP model and a PPN page store, the guest formatting the NAND
    and installing the system volume on its first boot, and B4 (effaceable storage and the system keybag,
-   keybagd running) the same day. Open: the data volume's journal (`newfs_hfs -J`), the PMU standby on halt.
+   keybagd running) the same day. The data volume is journaled (an 8 MiB journal), and the PMU's standby and
+   the codec's power-down are modeled since 2026-10-19, so a halt flushes the FTL and powers off.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
 9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and

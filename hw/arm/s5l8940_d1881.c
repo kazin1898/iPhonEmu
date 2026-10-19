@@ -16,6 +16,14 @@
  *              class adds to it (setCurrentDateTime writes it).
  *   0x96       system control: 0x2b (after 0xa1 <- 0) is the kernel's
  *              "pmu restart"; the part resets the SoC, and so does this.
+ *   0x15       bit 0 is standby: the kernel's halt ("pmu go stdby", 10B329
+ *              0x80aed7a0) sets it last and waits for the power to go. The
+ *              machine powers off (QEMU's guest shutdown).
+ *   0xaf       written by that same halt (0x10, or 0x90) when a cable powers
+ *              the phone: it restarts instead, and iBoot shows the battery
+ *              charging with iOS off until the power button. There is no
+ *              iBoot here, so a restart that follows that write powers the
+ *              machine off as well.
  *
  * The interrupt line is the DT's GPIO 0x0d (active low); the model's
  * gpio-out 0 is 1 while an unmasked event is pending. Everything else holds
@@ -52,6 +60,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940D1881State, S5L8940_D1881)
 #define D1881_RTC_COUNT     0x5d
 #define D1881_SYS_CONTROL   0x96
 #define D1881_SYS_RESTART   0x2b
+#define D1881_STANDBY       0x15
+#define D1881_STANDBY_GO    0x01
+#define D1881_HALT_REASON   0xaf
+#define D1881_HALT_ON_CABLE 0x10
 
 struct S5L8940D1881State {
     I2CSlave parent_obj;
@@ -136,7 +148,13 @@ static int d1881_send(I2CSlave *i2c, uint8_t data)
     trace_s5l8940_d1881_write(s->ptr, data);
     s->regs[s->ptr] = data;
     if (s->ptr == D1881_SYS_CONTROL && data == D1881_SYS_RESTART) {
-        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        if (s->regs[D1881_HALT_REASON] & D1881_HALT_ON_CABLE) {
+            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+        } else {
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+        }
+    } else if (s->ptr == D1881_STANDBY && (data & D1881_STANDBY_GO)) {
+        qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
     } else if (s->ptr == D1881_ADC_CTRL && (data & D1881_ADC_START)) {
         d1881_adc_start(s, data);
     } else if (s->ptr >= D1881_IRQ_MASK_A && s->ptr < D1881_IRQ_MASK_A + D1881_EVENT_COUNT) {

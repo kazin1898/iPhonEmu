@@ -11,6 +11,7 @@
 
 #define TYPE_CS42L58                 "cs42l58"
 #define TYPE_CS42L59                 "cs42l59"   /* + power-down status */
+#define TYPE_CS42L63                 "cs42l63"   /* + its own power-down status */
 OBJECT_DECLARE_SIMPLE_TYPE(CS42L58State, CS42L58)
 
 typedef struct CS42L58State {
@@ -20,6 +21,7 @@ typedef struct CS42L58State {
 	bool autoinc;
 	uint8_t regs[128];
 	bool pdn_status;     /* CS42L59: 0x38 bit 3 reports power-down done */
+	bool pdn_status63;   /* CS42L63: 0x62 bit 7, once 0x06 bit 0 (PDN) is set */
 	Clock *lrclk;
 } CS42L58State;
 

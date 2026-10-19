@@ -554,7 +554,7 @@ static void n94_init(MachineState *machine)
             const char *type;
         } slaves[] = {
             { 0, 0x74, TYPE_S5L8940_D1881 },     /* pmu,d1881 */
-            { 0, 0x4a, TYPE_CS42L58 },            /* audio-control,cs42l63: a MAP register file */
+            { 0, 0x4a, TYPE_CS42L63 },            /* audio-control,cs42l63: a MAP register file */
             { 1, 0x49, TYPE_S5L8930_TSL2581 },    /* als,tsl2581 */
             { 1, 0x0d, TYPE_S5L8930_AK8975 },     /* compass,akm8975b */
             { 2, 0x19, TYPE_LIS302DL },           /* accelerometer,lis331dlh */

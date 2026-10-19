@@ -124,6 +124,11 @@ the data volume and keybag are kept. A device needs this after a later edit to i
 `rootfs.hfs`, because the FTL's garbage collection copies served pages and those copies do not follow
 the edit ("M3", item 4).
 
+Ending a session: `tools/dev/n94_input.py --port PORT poweroff` is iOS's own "slide to power off" (the
+guest shuts down, the FTL is flushed and QEMU exits by itself). `quit`, closing the window or killing QEMU
+is a power cut for the guest: the next boot recovers (the FTL adopts its open spans, the journaled data
+volume checks clean), as checked in hardware.md "Power: off, restart, and a session cut short".
+
 `device delete NAME` removes `<root>/NAME` and nothing else: the directory must hold a `device.json`
 and sit directly under the root. The firmware stays for the other devices.
 
@@ -255,8 +260,8 @@ build/qemu-system-arm -M iPhone-4S,kboot=../runs/n94/install/kboot.bin,nand=../r
 otherwise) and builds both helpers, `it_install` and `it_keybag` (B4, below). On a blank store the kernel formats the FTL first (`nand-enable-reformat=1`, nine minutes);
 then launchd runs the helper: `it_install: hello`, the 312,445 markers (40 s), `MBR written`, `newfs_hfs`,
 `mount_hfs`, `launchd overrides`, `it_install: done`, and the halt (`runs/n94/run-install.sh`, outside
-the repository, quits QEMU on that line; the kernel's own halt ends in a panic after `pmu go stdby`, the
-D1881 model has no standby yet). A second install boot finds the MBR and only revisits the data volume.
+the repository, quits QEMU on that line; the kernel's own halt ended in a panic after `pmu go stdby` until
+the D1881 model got its standby on 2026-10-19, and `device` now waits for that power-off). A second install boot finds the MBR and only revisits the data volume.
 
 The normal boot is the bundle with no ramdisk, the device tree's `root-matching` (IOMedia, Partition ID 1)
 as the A4 boards use it:

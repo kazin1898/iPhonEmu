@@ -193,13 +193,17 @@ class Lock:
 
 
 DONE, FAIL = "it_install: done", "it_install: FAIL"
+HALT_WAIT = 90
 SHOW = ("it_install", "it_keybag", "FTL_Open", "Creating block device", "panic(")
 
 
 def run_install_boot(dev, limit, log=print, poll=2.0):
-    """The install boot on dev's store until the helper says done (or FAIL, or the kernel panics), then
-    quit through the monitor on stdin (a pipe: a fifo does not reach QEMU's monitor on Windows). Returns
-    (result line or None, seconds). The helper's own lines are passed to `log` as they come."""
+    """The install boot on dev's store until the helper says done (or FAIL, or the kernel panics). After
+    "done" the helper halts: the kernel flushes the FTL and the NVRAM and the PMU model powers the machine
+    off, so QEMU exits by itself; it is quit through the monitor on stdin (a pipe: a fifo does not reach
+    QEMU's monitor on Windows) only if it has not within HALT_WAIT seconds, or on FAIL or a panic (the FTL
+    then opens the next boot with "unclean shutdown"). Returns (result line or None, seconds). The
+    helper's own lines are passed to `log` as they come."""
     os.makedirs(dev.logs, exist_ok=True)
     serial = os.path.join(dev.logs, "install-serial.log")
     qlog = os.path.join(dev.logs, "install-qemu.log")
@@ -234,7 +238,12 @@ def run_install_boot(dev, limit, log=print, poll=2.0):
                 if DONE in line or FAIL in line or "panic(cpu" in line:
                     result = line.strip()
             if result:
-                time.sleep(3)       # the helper syncs and halts right after its last line
+                if DONE in result:
+                    try:
+                        proc.wait(HALT_WAIT)    # the helper's halt powers the machine off
+                        log(f"  [{time.time() - t0:5.0f}s] halted (the FTL flushed, the machine off)")
+                    except subprocess.TimeoutExpired:
+                        log(f"  [{time.time() - t0:5.0f}s] no power-off after {HALT_WAIT} s: quitting QEMU")
                 break
             if time.time() - last_note >= 120:
                 last_note = time.time()

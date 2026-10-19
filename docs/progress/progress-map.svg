@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 56.4% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 56.5% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -65,9 +65,9 @@
 <rect x="506" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="527" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="548" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="569" y="199" width="18" height="16" rx="3" fill="#7bd389"/>
-<text x="598" y="212" fill="#e6edf3" font-weight="600">95%</text>
-<text x="642" y="212" fill="#8b949e" font-size="12">data volume with the IPSW&#x27;s /private/var skeleton written under content protection, NVRAM, FTL, effaceable lockers and the system keybag survive boots; the FMI&#x27;s inline AES (v2 stores) keeps protected files (Setup done, wallpaper, icon caches) readable across boots; install boot refreshes the system markers</text>
+<rect x="569" y="199" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="212" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="212" fill="#8b949e" font-size="12">data volume (journaled, protected) with the IPSW&#x27;s /private/var skeleton, NVRAM, FTL, effaceable lockers, keybag and the FMI&#x27;s inline AES across boots; iOS&#x27;s power-off (codec power-down, PMU standby: QEMU exits), iOS&#x27;s own reboot and a killed QEMU all come back to the lock screen with fsck clean</text>
 <text x="20" y="238" fill="#c9d1d9" font-weight="600">Processor and platform</text>
 <text x="36" y="264" fill="#e6edf3">Cortex-A9 core, TCG</text>
 <rect x="380" y="251" width="18" height="16" rx="3" fill="#3fb950"/>

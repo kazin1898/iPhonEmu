@@ -31,9 +31,9 @@
         },
         {
           "name": "Persistence (data volume, NVRAM across boots)",
-          "percent": 95,
+          "percent": 100,
           "weight": 2,
-          "note": "data volume with the IPSW's /private/var skeleton written under content protection, NVRAM, FTL, effaceable lockers and the system keybag survive boots; the FMI's inline AES (v2 stores) keeps protected files (Setup done, wallpaper, icon caches) readable across boots; install boot refreshes the system markers"
+          "note": "data volume (journaled, protected) with the IPSW's /private/var skeleton, NVRAM, FTL, effaceable lockers, keybag and the FMI's inline AES across boots; iOS's power-off (codec power-down, PMU standby: QEMU exits), iOS's own reboot and a killed QEMU all come back to the lock screen with fsck clean"
         }
       ]
     },
