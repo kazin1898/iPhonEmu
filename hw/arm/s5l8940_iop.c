@@ -80,6 +80,7 @@
 #include "qobject/qdict.h"
 #include "qobject/qlist.h"
 #include "qobject/qnum.h"
+#include "crypto/cipher.h"
 #include "trace.h"
 #include "hw/trace-printf.h"
 
@@ -183,6 +184,7 @@ struct S5L8940IOPState {
 
     NandGeometry geo;
     bool have_store;
+    bool inline_aes;        /* "ppn-xor-ff-v2": the FMI's AES applied (fmi_inline_aes) */
     BlockBackend *chip[NAND_MAX_CHANNELS][NAND_MAX_CE];
 
     /* markers.json: host files served behind marker pages */
@@ -349,7 +351,8 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
         error_propagate(errp, err);
         return;
     }
-    if (g_strcmp0(qdict_get_try_str(d, "format"), "ppn-xor-ff-v1") || !id || strlen(id) != 12 ||
+    s->inline_aes = !g_strcmp0(qdict_get_try_str(d, "format"), "ppn-xor-ff-v2");
+    if ((!s->inline_aes && g_strcmp0(qdict_get_try_str(d, "format"), "ppn-xor-ff-v1")) || !id || strlen(id) != 12 ||
         g->channels < 1 || g->channels > NAND_MAX_CHANNELS || g->ce_per_channel < 1 ||
         g->ce_per_channel > NAND_MAX_CE || g->caus_per_ce > 1u << g->cau_bits ||
         g->blocks_per_cau > 1u << g->block_bits || g->pages_per_block > 1u << g->page_bits ||
@@ -445,12 +448,12 @@ static void nand_open_markers(S5L8940IOPState *s, Error **errp)
  * served as it is (and counted): the guest's file system then sees a bad
  * block instead of the model hanging.
  */
-static void nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
+static bool nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
 {
     uint32_t source, block, check;
 
     if (!s->nsources || memcmp(lpn, s->marker_magic, MARKER_MAGIC_LEN)) {
-        return;
+        return false;
     }
     source = ldl_le_p(lpn + 16);
     block = ldl_le_p(lpn + 20);
@@ -459,10 +462,11 @@ static void nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
         (uint64_t)(block + 1) * s->marker_block > s->source_bytes[source] ||
         blk_pread(s->source[source], (uint64_t)block * s->marker_block, s->marker_block, lpn, 0) < 0) {
         s->markers_bad++;
-        return;
+        return false;
     }
     s->markers_served++;
     TRACE_PRINTF(trace_s5l8940_iop_log, "marker source %u block %u served\n", source, block);
+    return true;
 }
 
 /*
@@ -772,6 +776,70 @@ static inline uint8_t iop_ldub(hwaddr addr)
     return address_space_ldub(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED, NULL);
 }
 
+/*
+ * The FMI's inline AES. A PPN read or program command that asks for it carries, after
+ * its segment lists, +0x34/+0x38 a list of one 16-byte IV per logical page the command
+ * moves (in entry order) and its count, +0x3c the data unit (0x1000, the logical page),
+ * +0x40 the cipher (3, AES-256) and +0x44 the 32-byte key: AES-256-CBC over each logical
+ * page, encrypted on the way to the chip and decrypted on the way back. HFS content
+ * protection hands the controller each file's own key this way. (Measured on 10B329:
+ * the stored pages of a preferences plist decrypted with the read command's key and IVs
+ * to `bplist00` ... `AppleLanguages`.) The kernel also writes pages it has already
+ * encrypted with the AES engine, as plain programs, and reads them back through this:
+ * a store that skips the AES on both sides (format v1) returned those pages still
+ * encrypted after a reboot, once the buffer cache no longer held them, and every
+ * protected file written in a session read as garbage in the next: Setup's completion,
+ * SpringBoard's icon layout, the wallpaper. Applied to stores of format v2 only (what
+ * nand_ppn.py writes now): a v1 store holds pages written through the pass-through and
+ * keeps it. Returns NULL for a command without it.
+ */
+#define FMI_AES_UNIT        0x3c
+#define FMI_AES_CIPHER      0x40
+#define FMI_AES_KEY         0x44
+#define FMI_AES_IVS         0x34
+#define FMI_AES_NIVS        0x38
+#define FMI_AES_256         3
+
+static QCryptoCipher *fmi_inline_aes(S5L8940IOPState *s, hwaddr cmd)
+{
+    static bool warned;
+    uint32_t unit = iop_ldl(cmd + FMI_AES_UNIT), cipher = iop_ldl(cmd + FMI_AES_CIPHER);
+    uint8_t key[32];
+    QCryptoCipher *c;
+
+    if (!s->inline_aes || !unit) {
+        return NULL;
+    }
+    if (unit != s->geo.lpn_bytes || cipher != FMI_AES_256) {
+        if (!warned) {
+            warned = true;
+            qemu_log_mask(LOG_UNIMP, "s5l8940.iop: FMI AES unit 0x%x cipher %u not modeled\n", unit, cipher);
+        }
+        return NULL;
+    }
+    iop_read(cmd + FMI_AES_KEY, key, sizeof(key));
+    c = qcrypto_cipher_new(QCRYPTO_CIPHER_ALGO_AES_256, QCRYPTO_CIPHER_MODE_CBC, key, sizeof(key), NULL);
+    memset(key, 0, sizeof(key));
+    return c;
+}
+
+/* Logical page `buf` through the command's AES with its IV number `n`; false past the list. */
+static bool fmi_aes_page(S5L8940IOPState *s, QCryptoCipher *c, hwaddr cmd, uint32_t n, uint8_t *buf,
+                         bool encrypt)
+{
+    uint8_t iv[16];
+
+    if (n >= iop_ldl(cmd + FMI_AES_NIVS)) {
+        return false;
+    }
+    iop_read(iop_pa(s, iop_ldl(cmd + FMI_AES_IVS)) + 16 * n, iv, sizeof(iv));
+    if (qcrypto_cipher_setiv(c, iv, sizeof(iv), NULL) < 0) {
+        return false;
+    }
+    return (encrypt ? qcrypto_cipher_encrypt(c, buf, buf, s->geo.lpn_bytes, NULL)
+                    : qcrypto_cipher_decrypt(c, buf, buf, s->geo.lpn_bytes, NULL)) == 0;
+}
+
 static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
 {
     NandGeometry *g = &s->geo;
@@ -782,7 +850,8 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
     g_autofree uint8_t *page = g_malloc(NAND_MAX_PAGE);
     SegCursor data, meta;
     uint8_t overall = 0;
-    uint32_t j, k;
+    uint32_t j, k, ivn = 0;
+    g_autoptr(QCryptoCipher) aes = op == FMI_OP_PPN_ERASE ? NULL : fmi_inline_aes(s, cmd);
 
     if (!s->have_store || n == 0 || n > PPN_MAX_PAGES) {
         return FMI_STATUS_INVALID;
@@ -804,33 +873,42 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
         switch (op) {
         case FMI_OP_PPN_READ:
             if (nand_read_page(s, ch, ce, row, page, &erased)) {
+                st = erased ? PPN_ST_DONE | PPN_ST_CLEAN : PPN_ST_DONE;
                 for (k = first; k < first + count; k++) {
-                    if (!erased) {
-                        nand_serve_marker(s, page + k * lpn_bytes);
+                    if (!erased && !nand_serve_marker(s, page + k * lpn_bytes) && aes &&
+                        !fmi_aes_page(s, aes, cmd, ivn, page + k * lpn_bytes, false)) {
+                        st = PPN_ST_ERROR;
                     }
+                    ivn++;
                     seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, true);
                     seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, true);
                 }
-                st = erased ? PPN_ST_DONE | PPN_ST_CLEAN : PPN_ST_DONE;
             } else {
                 st = PPN_ST_ERROR;
             }
             break;
         case FMI_OP_PPN_WRITE:
             memset(page, 0xff, g->stride);
+            st = PPN_ST_DONE;
             for (k = first; k < first + count; k++) {
                 seg_copy(s, &data, page + k * lpn_bytes, lpn_bytes, false);
                 seg_copy(s, &meta, page + g->page_bytes + k * lpn_meta, lpn_meta, false);
+                if (aes && !fmi_aes_page(s, aes, cmd, ivn, page + k * lpn_bytes, true)) {
+                    st = PPN_ST_ERROR;
+                }
+                ivn++;
             }
-            st = nand_program_page(s, ch, ce, row, page, g->stride) ? PPN_ST_DONE : PPN_ST_ERROR;
+            if (st == PPN_ST_DONE && !nand_program_page(s, ch, ce, row, page, g->stride)) {
+                st = PPN_ST_ERROR;
+            }
             break;
         default:
             st = nand_erase_block(s, ch, ce, row) ? PPN_ST_DONE : PPN_ST_ERROR;
             break;
         }
-        TRACE_PRINTF(trace_s5l8940_iop_log, "ppn %s ch%d ce%u row 0x%08x lpn %u+%u -> %02x\n",
+        TRACE_PRINTF(trace_s5l8940_iop_log, "ppn %s ch%d ce%u row 0x%08x lpn %u+%u -> %02x%s\n",
                      op == FMI_OP_PPN_READ ? "read" : op == FMI_OP_PPN_WRITE ? "write" : "erase",
-                     ch, ce, row, first, count, st);
+                     ch, ce, row, first, count, st, aes ? " aes" : "");
         address_space_write(&address_space_memory, e + PPN_ENTRY_STATUS, MEMTXATTRS_UNSPECIFIED, &st, 1);
         overall |= st;
     }
