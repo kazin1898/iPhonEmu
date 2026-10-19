@@ -135,7 +135,9 @@ store, which the page files' own locking does not on Windows.
 Layout of `<root>/NAME`: `device.json` (firmware, IPSW, size, seed, state, install history), `nand/`
 (`geometry.json`, `ch*-ce0.pages`, `markers.json`, with an absolute `rootfs.hfs` path when the store is
 on another drive), `install/` (`it_install`, `it_keybag`, `ramdisk-install.dmg`, `kboot.bin`),
-`kboot.bin` with its `.json`, `identity.json`, `logs/`. Lower-level commands for a store of another size:
+`kboot.bin` with its `.json`, `identity.json`, `logs/`. `nand/pagemap.bin` is the page store's map of its
+marker pages, written when QEMU exits and removed when the next session loads it (hardware.md "Storage: the
+page store on the host"); a device without one rebuilds it in the background. Lower-level commands for a store of another size:
 `nand --out DIR --storage 4G`, then `kboot ... --nand ppn --nand-store DIR`.
 
 Measured on 2026-10-18 (stores on E:, firmware on C:, two `create` runs in parallel):
@@ -152,6 +154,10 @@ running, `device delete t4` and a second `device boot t4` were refused. `device 
 ("already installed", the system keybag left as it was), and `device delete t4 --yes` removed only
 `t4`. Setup was not walked to the home screen on these devices. The activation patch they get is the one
 M4 walked, on the same firmware directory.
+
+Measured again on 2026-10-19 with the page store's host-side work cut (hardware.md "Storage: the page
+store on the host"; 16 GiB units, stores on the host's HDD): `device create` 69 s (97 s before), the first
+boot to Setup's welcome screen 115-120 s (175 s), a normal boot to the lock screen 70 s.
 
 Not automated yet:
 

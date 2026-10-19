@@ -501,6 +501,7 @@ static void n94_init(MachineState *machine)
      * EmbeddedIOP rings in DRAM. AppleIOPFMI's PPN commands come to it next.
      */
     dev = qdev_new(TYPE_S5L8940_IOP);
+    object_property_add_child(OBJECT(machine), "iop", OBJECT(dev));
     object_property_set_link(OBJECT(dev), "aic", OBJECT(s->aic), &error_abort);
     if (s->nand_path) {
         qdev_prop_set_string(dev, "nand", s->nand_path);

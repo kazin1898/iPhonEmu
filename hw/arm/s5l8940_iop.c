@@ -60,11 +60,21 @@
  * /dev/rdisk0, so the FTL lays the volume out in its own on-flash format while
  * the host keeps the bytes; a page the guest rewrites loses the magic and is an
  * ordinary page from then on.
+ *
+ * What the store costs the host (docs/n94/hardware.md "Storage: the page store on
+ * the host"): the holes of the sparse chip files are known erased pages (no I/O
+ * to read, program or erase them), consecutive pages of a command move in one
+ * host I/O, and the marker pages are kept in a map (pagemap.bin beside the store
+ * between sessions) so that reading one goes to its source alone. "store-stats"
+ * (QOM, /machine/iop) and a line on stderr at exit count all of it.
  */
 #include "qemu/osdep.h"
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "qemu/module.h"
+#include "qemu/bitmap.h"
+#include "qemu/thread.h"
+#include <glib/gstdio.h>
 #include "qemu/error-report.h"
 #include "hw/core/irq.h"
 #include "hw/core/sysbus.h"
@@ -73,6 +83,7 @@
 #include "system/address-spaces.h"
 #include "system/block-backend.h"
 #include "system/runstate.h"
+#include "system/system.h"
 #include "block/block.h"
 #include "migration/vmstate.h"
 #include "qapi/error.h"
@@ -83,6 +94,9 @@
 #include "crypto/cipher.h"
 #include "trace.h"
 #include "hw/trace-printf.h"
+#ifdef _WIN32
+#include <winioctl.h>
+#endif
 
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8940IOPState, S5L8940_IOP)
 
@@ -156,6 +170,22 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940IOPState, S5L8940_IOP)
 #define MARKER_MAGIC_LEN    16
 #define MARKER_MAX_SOURCES  8
 
+/*
+ * What the store did in this session, for measuring the FTL's cost on the host
+ * (the "store-stats" property, and a summary on stderr when QEMU exits): pages
+ * read and programmed, blocks erased (those already erased are holes and
+ * skipped), markers served, pages through the inline AES, page errors, and the
+ * host time spent in each; per block, the erases of this session (wear).
+ */
+enum {
+    NS_READ, NS_READ_BLANK, NS_READ_MAP, NS_PROGRAM, NS_PROGRAM_BLANK, NS_ERASE, NS_ERASE_HOLE, NS_MARKER,
+    NS_AES, NS_ERROR, NS_CMD, NS_KINDS
+};
+static const char *const nand_stat_names[NS_KINDS] = {
+    "read", "read-blank", "read-map", "program", "program-blank", "erase", "erase-hole", "marker", "aes",
+    "error", "command",
+};
+
 typedef struct NandGeometry {
     uint32_t channels, ce_per_channel, caus_per_ce, blocks_per_cau, pages_per_block;
     uint32_t page_bytes, meta_bytes, boot_page_bytes, lpn_bytes;
@@ -195,7 +225,41 @@ struct S5L8940IOPState {
     BlockBackend *source[MARKER_MAX_SOURCES];
     uint64_t source_bytes[MARKER_MAX_SOURCES];
     uint64_t markers_served, markers_bad;
+
+    uint64_t stat_n[NS_KINDS], stat_ns[NS_KINDS];
+    uint32_t *erases[NAND_MAX_CHANNELS][NAND_MAX_CE];  /* per block, this session */
+    unsigned long *blank[NAND_MAX_CHANNELS][NAND_MAX_CE];  /* per page: known erased (nand_scan_holes) */
+    int64_t opened_ns;
+    /* the marker-page map (nand_map_*): which stored pages are whole marker pages */
+    bool page_map;              /* "page-map" */
+    QemuMutex map_lock;
+    GHashTable *mpages[NAND_MAX_CHANNELS][NAND_MAX_CE];    /* page index -> MarkerPage */
+    uint32_t *bgen[NAND_MAX_CHANNELS][NAND_MAX_CE];        /* per block, bumped by every change */
+    bool map_complete;          /* every stored page has been looked at (scan or saved map) */
+    uint64_t map_loaded;
+    int64_t scan_done_ns;
+    uint64_t scan_bytes;
+    int64_t last_read_ns;       /* the guest's latest host read, which the scan gives way to */
+    Notifier exit_notifier;
 };
+
+static inline int64_t nand_clock(void)
+{
+    return qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+}
+
+static inline void nand_stat_n(S5L8940IOPState *s, int kind, uint32_t n, int64_t since)
+{
+    s->stat_n[kind] += n;
+    if (since) {
+        s->stat_ns[kind] += nand_clock() - since;
+    }
+}
+
+static inline void nand_stat(S5L8940IOPState *s, int kind, int64_t since)
+{
+    nand_stat_n(s, kind, 1, since);
+}
 
 static inline uint32_t iop_ldl(hwaddr addr)
 {
@@ -262,10 +326,100 @@ static int64_t geometry_get(QDict *g, const char *key, Error **errp)
 }
 
 /*
- * A chip's page file (created at its geometry's size when missing) or, with
- * size 0, a read-only marker source taken as it is.
+ * The allocated ranges of a sparse file up to end, in order, through fn; false when the
+ * host or its file system cannot say (then every byte may be data).
  */
-static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uint64_t size, Error **errp)
+static bool nand_alloc_ranges(int fd, uint64_t end, void (*fn)(uint64_t at, uint64_t len, void *opaque),
+                              void *opaque)
+{
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    FILE_ALLOCATED_RANGE_BUFFER in, out[64];
+    DWORD got, i;
+    BOOL ok;
+
+    in.FileOffset.QuadPart = 0;
+    in.Length.QuadPart = end;
+    do {
+        ok = DeviceIoControl(h, FSCTL_QUERY_ALLOCATED_RANGES, &in, sizeof(in), out, sizeof(out), &got, NULL);
+        if (!ok && GetLastError() != ERROR_MORE_DATA) {
+            return false;
+        }
+        got /= sizeof(out[0]);
+        for (i = 0; i < got; i++) {
+            fn(out[i].FileOffset.QuadPart, out[i].Length.QuadPart, opaque);
+            in.FileOffset.QuadPart = out[i].FileOffset.QuadPart + out[i].Length.QuadPart;
+        }
+        in.Length.QuadPart = end - in.FileOffset.QuadPart;
+    } while (!ok && got);
+    return true;
+#elif defined(SEEK_DATA) && defined(SEEK_HOLE)
+    off_t at = 0;
+
+    while (at < (off_t)end) {
+        off_t data = lseek(fd, at, SEEK_DATA), hole;
+
+        if (data < 0) {
+            return errno == ENXIO;
+        }
+        hole = lseek(fd, data, SEEK_HOLE);
+        if (hole < 0 || hole > (off_t)end) {
+            hole = end;
+        }
+        fn(data, hole - data, opaque);
+        at = hole;
+    }
+    return true;
+#else
+    return false;
+#endif
+}
+
+typedef struct HoleScan {
+    unsigned long *blank;
+    uint64_t pages;
+    uint32_t stride;
+} HoleScan;
+
+static void nand_clear_allocated(uint64_t at, uint64_t len, void *opaque)
+{
+    HoleScan *h = opaque;
+    uint64_t first = at / h->stride, last = MIN((at + len + h->stride - 1) / h->stride, h->pages);
+
+    if (last > first) {
+        bitmap_clear(h->blank, first, last - first);
+    }
+}
+
+/*
+ * Which pages of a chip file are holes, so known erased (a hole reads as zeros,
+ * the stored form of 0xff): every page not touched by an allocated range of
+ * the sparse file. The store keeps that knowledge for the session (blank):
+ * an erase marks the block's pages, a program clears its page, and a page
+ * known erased is read, programmed and erased with no host I/O beyond the
+ * program's own write. Without it each program read the page back before
+ * writing it (flash only clears bits) and each erase read the whole block (1
+ * MiB) to tell a hole from data, which on a new unit was 45 of the install
+ * boot's 89 s. A host or file system that cannot say leaves every page unknown,
+ * as before.
+ */
+static void nand_scan_holes(int fd, unsigned long *blank, uint64_t pages, uint32_t stride)
+{
+    HoleScan h = { blank, pages, stride };
+
+    bitmap_set(blank, 0, pages);
+    if (!nand_alloc_ranges(fd, pages * stride, nand_clear_allocated, &h)) {
+        bitmap_zero(blank, pages);
+    }
+}
+
+/*
+ * A chip's page file (created at its geometry's size when missing) or, with
+ * size 0, a read-only marker source taken as it is. blank, for a chip file,
+ * gets its holes (nand_scan_holes).
+ */
+static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uint64_t size,
+                                       unsigned long *blank, uint32_t stride, Error **errp)
 {
     struct stat st;
     QDict *options;
@@ -287,6 +441,9 @@ static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uin
         error_setg(errp, "%s: NAND file size differs from geometry", path);
         close(fd);
         return NULL;
+    }
+    if (blank) {
+        nand_scan_holes(fd, blank, size / stride, stride);
     }
     close(fd);
     options = qdict_new();
@@ -314,6 +471,7 @@ static BlockBackend *nand_open_backend(DeviceState *owner, const char *path, uin
 }
 
 static void nand_open_markers(S5L8940IOPState *s, Error **errp);
+static void nand_map_start(S5L8940IOPState *s);
 
 static void nand_open_store(S5L8940IOPState *s, Error **errp)
 {
@@ -370,14 +528,21 @@ static void nand_open_store(S5L8940IOPState *s, Error **errp)
         for (ce = 0; ce < g->ce_per_channel; ce++) {
             g_autofree char *f = g_strdup_printf("%s/ch%u-ce%u.pages", s->nand_dir, ch, ce);
 
-            s->chip[ch][ce] = nand_open_backend(DEVICE(s), f, g->pages_per_ce * g->stride, errp);
+            s->blank[ch][ce] = bitmap_new(g->pages_per_ce);
+            s->chip[ch][ce] = nand_open_backend(DEVICE(s), f, g->pages_per_ce * g->stride, s->blank[ch][ce],
+                                                g->stride, errp);
             if (!s->chip[ch][ce]) {
                 return;
             }
+            s->erases[ch][ce] = g_new0(uint32_t, (size_t)g->caus_per_ce * g->blocks_per_cau);
         }
     }
     s->have_store = true;
+    s->opened_ns = nand_clock();
     nand_open_markers(s, errp);
+    if (!*errp && s->page_map && s->nsources) {
+        nand_map_start(s);
+    }
 }
 
 /*
@@ -433,7 +598,7 @@ static void nand_open_markers(S5L8940IOPState *s, Error **errp)
             return;
         }
         full = g_path_is_absolute(p) ? g_strdup(p) : g_strdup_printf("%s/%s", s->nand_dir, p);
-        s->source[s->nsources] = nand_open_backend(DEVICE(s), full, 0, errp);
+        s->source[s->nsources] = nand_open_backend(DEVICE(s), full, 0, NULL, 0, errp);
         if (!s->source[s->nsources]) {
             return;
         }
@@ -465,8 +630,372 @@ static bool nand_serve_marker(S5L8940IOPState *s, uint8_t *lpn)
         return false;
     }
     s->markers_served++;
+    nand_stat(s, NS_MARKER, 0);
     TRACE_PRINTF(trace_s5l8940_iop_log, "marker source %u block %u served\n", source, block);
     return true;
+}
+
+/*
+ * The marker-page map. The system volume is 312,445 marker pages (B3), and they are
+ * most of what a boot reads: about 21,000 of the 25,000 pages of a new unit's first
+ * boot. Each of those reads went to the chip file only to find the 28-byte marker (the
+ * rest of the logical page is zeros) and the page's meta, and on a hard disk each cost a
+ * seek: about 13 ms cold, which made the store 68 of the 175 s to Setup. The host's own
+ * cache did not hold them between sessions, nor a read-ahead's pages for long. So the
+ * store keeps, per chip, which stored pages are whole marker pages (every logical page
+ * an exact marker), with their meta and the {source, block} of each logical page: 48
+ * bytes a page. A read of such a page is rebuilt from that and goes to the source (the
+ * IPSW's rootfs.hfs) alone.
+ *
+ * Every program and erase updates the map (and bumps the block's generation), so it
+ * follows the store exactly within a session. Across sessions it is kept beside the
+ * store (pagemap.bin), written at QEMU's exit and removed as soon as it is loaded, so a
+ * session that ends without its exit (killed, a host crash) leaves none, and the next
+ * one scans the store instead: a thread reads every allocated block of the chip files
+ * in order, giving way to the guest's own reads, and adds the marker pages of a block
+ * whose generation did not change while it read. Pages read by the guest are added as
+ * they come too.
+ */
+#define NAND_MAX_LPNS       4
+#define PAGEMAP_MAGIC       "iPhonEmu-pmap-v1"
+#define NAND_SCAN_YIELD_NS  (3 * SCALE_MS)      /* a guest read this recent: the scan waits */
+#define NAND_SCAN_WAIT_MS   20                  /* at most this long per block */
+
+typedef struct MarkerPage {
+    uint32_t src[NAND_MAX_LPNS], blk[NAND_MAX_LPNS];
+    uint8_t meta[];
+} MarkerPage;
+
+static uint32_t nand_lpns(S5L8940IOPState *s)
+{
+    return s->geo.page_bytes / s->geo.lpn_bytes;
+}
+
+static size_t nand_mpage_size(S5L8940IOPState *s)
+{
+    return sizeof(MarkerPage) + s->geo.meta_bytes;
+}
+
+/* page (stored, XOR 0xff, or as on flash) as a MarkerPage when every logical page is an exact marker */
+static MarkerPage *nand_marker_parse(S5L8940IOPState *s, const uint8_t *page, bool stored)
+{
+    uint8_t x = stored ? 0xff : 0;
+    uint32_t k, i, lpns = nand_lpns(s);
+    uint8_t hdr[28];
+    MarkerPage *m;
+
+    if (!s->nsources || lpns > NAND_MAX_LPNS) {
+        return NULL;
+    }
+    for (k = 0; k < lpns; k++) {
+        const uint8_t *l = page + k * s->geo.lpn_bytes;
+
+        for (i = 0; i < sizeof(hdr); i++) {
+            hdr[i] = l[i] ^ x;
+        }
+        if (memcmp(hdr, s->marker_magic, MARKER_MAGIC_LEN) ||
+            (ldl_le_p(hdr + 16) ^ ldl_le_p(hdr + 20) ^ s->marker_check) != ldl_le_p(hdr + 24)) {
+            return NULL;
+        }
+        for (i = sizeof(hdr); i < s->geo.lpn_bytes; i++) {
+            if (l[i] != x) {
+                return NULL;
+            }
+        }
+    }
+    m = g_malloc(nand_mpage_size(s));
+    for (k = 0; k < lpns; k++) {
+        m->src[k] = ldl_le_p(page + k * s->geo.lpn_bytes + 16) ^ (stored ? 0xffffffff : 0);
+        m->blk[k] = ldl_le_p(page + k * s->geo.lpn_bytes + 20) ^ (stored ? 0xffffffff : 0);
+    }
+    for (i = 0; i < s->geo.meta_bytes; i++) {
+        m->meta[i] = page[s->geo.page_bytes + i] ^ x;
+    }
+    return m;
+}
+
+/* the page as on flash from its map entry; false when it has none */
+static bool nand_map_get(S5L8940IOPState *s, int ch, uint32_t ce, int64_t idx, uint8_t *page)
+{
+    MarkerPage *m;
+    uint32_t k;
+
+    qemu_mutex_lock(&s->map_lock);
+    m = g_hash_table_lookup(s->mpages[ch][ce], GSIZE_TO_POINTER(idx));
+    if (m) {
+        memset(page, 0, s->geo.page_bytes);
+        for (k = 0; k < nand_lpns(s); k++) {
+            uint8_t *l = page + k * s->geo.lpn_bytes;
+
+            memcpy(l, s->marker_magic, MARKER_MAGIC_LEN);
+            stl_le_p(l + 16, m->src[k]);
+            stl_le_p(l + 20, m->blk[k]);
+            stl_le_p(l + 24, m->src[k] ^ m->blk[k] ^ s->marker_check);
+        }
+        memcpy(page + s->geo.page_bytes, m->meta, s->geo.meta_bytes);
+    }
+    qemu_mutex_unlock(&s->map_lock);
+    return m != NULL;
+}
+
+/* page idx now holds page (stored or as on flash; NULL: unknown); gen: bump its block's generation */
+static void nand_map_note(S5L8940IOPState *s, int ch, uint32_t ce, int64_t idx, const uint8_t *page, bool stored,
+                          bool gen)
+{
+    MarkerPage *m = page && s->mpages[ch][ce] ? nand_marker_parse(s, page, stored) : NULL;
+
+    if (!s->mpages[ch][ce]) {
+        return;
+    }
+    qemu_mutex_lock(&s->map_lock);
+    if (gen) {
+        s->bgen[ch][ce][idx / s->geo.pages_per_block]++;
+    }
+    if (m) {
+        g_hash_table_replace(s->mpages[ch][ce], GSIZE_TO_POINTER(idx), m);
+    } else {
+        g_hash_table_remove(s->mpages[ch][ce], GSIZE_TO_POINTER(idx));
+    }
+    qemu_mutex_unlock(&s->map_lock);
+}
+
+static void nand_map_erase(S5L8940IOPState *s, int ch, uint32_t ce, int64_t first)
+{
+    uint32_t k;
+
+    if (!s->mpages[ch][ce]) {
+        return;
+    }
+    qemu_mutex_lock(&s->map_lock);
+    s->bgen[ch][ce][first / s->geo.pages_per_block]++;
+    for (k = 0; k < s->geo.pages_per_block; k++) {
+        g_hash_table_remove(s->mpages[ch][ce], GSIZE_TO_POINTER(first + k));
+    }
+    qemu_mutex_unlock(&s->map_lock);
+}
+
+static void nand_note_range(uint64_t at, uint64_t len, void *opaque)
+{
+    uint64_t r[2] = { at, len };
+
+    g_array_append_vals(opaque, r, 2);
+}
+
+/* The scan: every allocated block of every chip file, its marker pages into the map. */
+static void *nand_map_scan(void *opaque)
+{
+    S5L8940IOPState *s = opaque;
+    NandGeometry *g = &s->geo;
+    uint64_t block_bytes = (uint64_t)g->pages_per_block * g->stride;
+    g_autofree uint8_t *buf = g_malloc(block_bytes);
+    uint32_t ch, ce;
+
+    for (ch = 0; ch < g->channels; ch++) {
+        for (ce = 0; ce < g->ce_per_channel; ce++) {
+            g_autofree char *path = g_strdup_printf("%s/ch%u-ce%u.pages", s->nand_dir, ch, ce);
+            g_autoptr(GArray) ranges = g_array_new(false, false, sizeof(uint64_t));
+            int fd = open(path, O_RDONLY | O_BINARY);
+            int64_t last = -1;
+            guint r;
+
+            if (fd < 0) {
+                continue;
+            }
+#ifdef _WIN32
+            {
+                /* low I/O priority on this handle only: the guest's reads go first */
+                FILE_IO_PRIORITY_HINT_INFO hint = { .PriorityHint = IoPriorityHintLow };
+
+                SetFileInformationByHandle((HANDLE)_get_osfhandle(fd), FileIoPriorityHintInfo, &hint, sizeof(hint));
+            }
+#endif
+            if (!nand_alloc_ranges(fd, g->pages_per_ce * g->stride, nand_note_range, ranges)) {
+                /* no hole information: every block */
+                uint64_t all[2] = { 0, g->pages_per_ce * g->stride };
+
+                g_array_append_vals(ranges, all, 2);
+            }
+            for (r = 0; r + 1 < ranges->len; r += 2) {
+                uint64_t at = g_array_index(ranges, uint64_t, r);
+                uint64_t end = at + g_array_index(ranges, uint64_t, r + 1);
+                int64_t b;
+
+                for (b = at / block_bytes; (uint64_t)b * block_bytes < end; b++) {
+                    uint32_t gen, k;
+                    int waited = 0;
+
+                    if (b <= last || (uint64_t)b >= (uint64_t)g->caus_per_ce * g->blocks_per_cau) {
+                        continue;
+                    }
+                    last = b;
+                    while (nand_clock() - qatomic_read(&s->last_read_ns) < NAND_SCAN_YIELD_NS &&
+                           waited++ < NAND_SCAN_WAIT_MS) {
+                        g_usleep(1000);
+                    }
+                    qemu_mutex_lock(&s->map_lock);
+                    gen = s->bgen[ch][ce][b];
+                    qemu_mutex_unlock(&s->map_lock);
+                    if (lseek(fd, b * block_bytes, SEEK_SET) != (off_t)(b * block_bytes) ||
+                        read(fd, buf, block_bytes) != (ssize_t)block_bytes) {
+                        continue;
+                    }
+                    qatomic_set(&s->scan_bytes, qatomic_read(&s->scan_bytes) + block_bytes);
+                    for (k = 0; k < g->pages_per_block; k++) {
+                        int64_t idx = b * g->pages_per_block + k;
+                        MarkerPage *m = nand_marker_parse(s, buf + (size_t)k * g->stride, true);
+
+                        if (!m) {
+                            continue;
+                        }
+                        qemu_mutex_lock(&s->map_lock);
+                        if (s->bgen[ch][ce][b] == gen &&
+                            !g_hash_table_contains(s->mpages[ch][ce], GSIZE_TO_POINTER(idx))) {
+                            g_hash_table_insert(s->mpages[ch][ce], GSIZE_TO_POINTER(idx), m);
+                            m = NULL;
+                        }
+                        qemu_mutex_unlock(&s->map_lock);
+                        g_free(m);
+                    }
+                }
+            }
+            close(fd);
+        }
+    }
+    qemu_mutex_lock(&s->map_lock);
+    s->map_complete = true;
+    qemu_mutex_unlock(&s->map_lock);
+    qatomic_set(&s->scan_done_ns, nand_clock());
+    return NULL;
+}
+
+/* pagemap.bin: header {magic[16], u32 stride, pages_per_ce, channels, ce_per_channel, lpns, count}, then
+ * count records {u8 ch, u8 ce, u16 0, u32 page index, u32 src[lpns], u32 blk[lpns], meta} */
+static bool nand_map_load(S5L8940IOPState *s, const char *path)
+{
+    NandGeometry *g = &s->geo;
+    g_autofree char *data = NULL;
+    gsize len, at = 40, rec = 8 + 8 * nand_lpns(s) + g->meta_bytes;
+    uint32_t count, i, k;
+
+    if (!g_file_get_contents(path, &data, &len, NULL) || len < at || memcmp(data, PAGEMAP_MAGIC, 16) ||
+        ldl_le_p(data + 16) != g->stride || ldl_le_p(data + 20) != g->pages_per_ce ||
+        ldl_le_p(data + 24) != g->channels || ldl_le_p(data + 28) != g->ce_per_channel ||
+        ldl_le_p(data + 32) != nand_lpns(s)) {
+        return false;
+    }
+    count = ldl_le_p(data + 36);
+    if (len != at + (gsize)count * rec) {
+        return false;
+    }
+    for (i = 0; i < count; i++, at += rec) {
+        const uint8_t *r = (const uint8_t *)data + at;
+        uint32_t ch = r[0], ce = r[1], idx = ldl_le_p(r + 4);
+        MarkerPage *m;
+
+        if (ch >= g->channels || ce >= g->ce_per_channel || idx >= g->pages_per_ce) {
+            return false;
+        }
+        m = g_malloc(nand_mpage_size(s));
+        for (k = 0; k < nand_lpns(s); k++) {
+            m->src[k] = ldl_le_p(r + 8 + 4 * k);
+            m->blk[k] = ldl_le_p(r + 8 + 4 * (nand_lpns(s) + k));
+        }
+        memcpy(m->meta, r + 8 + 8 * nand_lpns(s), g->meta_bytes);
+        g_hash_table_replace(s->mpages[ch][ce], GSIZE_TO_POINTER(idx), m);
+    }
+    s->map_loaded = count;
+    return true;
+}
+
+static void nand_map_save(S5L8940IOPState *s)
+{
+    NandGeometry *g = &s->geo;
+    g_autofree char *path = g_strdup_printf("%s/pagemap.bin", s->nand_dir);
+    g_autofree char *tmp = g_strdup_printf("%s.tmp", path);
+    GString *out = g_string_new(NULL);
+    uint8_t hdr[40], *rec = g_malloc(8 + 8 * nand_lpns(s) + g->meta_bytes);
+    uint32_t ch, ce, k, count = 0;
+
+    qemu_mutex_lock(&s->map_lock);
+    if (!s->map_complete) {
+        /* a map short of the store's pages would make the next session skip its scan */
+        qemu_mutex_unlock(&s->map_lock);
+        g_free(rec);
+        g_string_free(out, true);
+        return;
+    }
+    g_string_append_len(out, (char *)hdr, sizeof(hdr));
+    for (ch = 0; ch < g->channels; ch++) {
+        for (ce = 0; ce < g->ce_per_channel; ce++) {
+            GHashTableIter it;
+            gpointer key, val;
+
+            g_hash_table_iter_init(&it, s->mpages[ch][ce]);
+            while (g_hash_table_iter_next(&it, &key, &val)) {
+                MarkerPage *m = val;
+
+                memset(rec, 0, 8);
+                rec[0] = ch;
+                rec[1] = ce;
+                stl_le_p(rec + 4, GPOINTER_TO_SIZE(key));
+                for (k = 0; k < nand_lpns(s); k++) {
+                    stl_le_p(rec + 8 + 4 * k, m->src[k]);
+                    stl_le_p(rec + 8 + 4 * (nand_lpns(s) + k), m->blk[k]);
+                }
+                memcpy(rec + 8 + 8 * nand_lpns(s), m->meta, g->meta_bytes);
+                g_string_append_len(out, (char *)rec, 8 + 8 * nand_lpns(s) + g->meta_bytes);
+                count++;
+            }
+        }
+    }
+    qemu_mutex_unlock(&s->map_lock);
+    memcpy(hdr, PAGEMAP_MAGIC, 16);
+    stl_le_p(hdr + 16, g->stride);
+    stl_le_p(hdr + 20, g->pages_per_ce);
+    stl_le_p(hdr + 24, g->channels);
+    stl_le_p(hdr + 28, g->ce_per_channel);
+    stl_le_p(hdr + 32, nand_lpns(s));
+    stl_le_p(hdr + 36, count);
+    memcpy(out->str, hdr, sizeof(hdr));
+    if (g_file_set_contents(tmp, out->str, out->len, NULL)) {
+        g_unlink(path);
+        g_rename(tmp, path);
+    }
+    g_free(rec);
+    g_string_free(out, true);
+}
+
+static void nand_map_start(S5L8940IOPState *s)
+{
+    NandGeometry *g = &s->geo;
+    g_autofree char *path = g_strdup_printf("%s/pagemap.bin", s->nand_dir);
+    uint32_t ch, ce;
+    QemuThread t;
+
+    qemu_mutex_init(&s->map_lock);
+    for (ch = 0; ch < g->channels; ch++) {
+        for (ce = 0; ce < g->ce_per_channel; ce++) {
+            s->mpages[ch][ce] = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
+            s->bgen[ch][ce] = g_new0(uint32_t, (size_t)g->caus_per_ce * g->blocks_per_cau);
+        }
+    }
+    if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+        bool ok = nand_map_load(s, path);
+
+        /* gone before the guest writes anything: only an orderly exit writes it again */
+        g_unlink(path);
+        if (ok) {
+            s->map_complete = true;
+            return;
+        }
+        for (ch = 0; ch < g->channels; ch++) {
+            for (ce = 0; ce < g->ce_per_channel; ce++) {
+                g_hash_table_remove_all(s->mpages[ch][ce]);
+            }
+        }
+        s->map_loaded = 0;
+    }
+    qemu_thread_create(&t, "nand-map-scan", nand_map_scan, s, QEMU_THREAD_DETACHED);
 }
 
 /*
@@ -499,26 +1028,66 @@ static BlockBackend *nand_chip(S5L8940IOPState *s, int ch, uint32_t ce)
 }
 
 /* The page as on flash (data then meta); true when readable, *erased when all 0xff. */
-static bool nand_read_page(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t row, uint8_t *buf, bool *erased)
+/*
+ * n consecutive pages of a chip file from page index idx, as on flash (data then meta,
+ * stride bytes each), in one host read; erased[k] true when page k is all 0xff.
+ */
+static bool nand_read_pages(S5L8940IOPState *s, int ch, uint32_t ce, int64_t idx, uint32_t n, uint8_t *buf,
+                            bool *erased)
 {
     BlockBackend *blk = nand_chip(s, ch, ce);
-    int64_t idx = nand_page_index(s, row);
-    uint32_t i;
+    uint32_t stride = s->geo.stride, i, k;
+    int64_t t0 = nand_clock();
 
-    if (!blk || idx < 0) {
+    if (!blk || idx < 0 || idx + n > s->geo.pages_per_ce) {
         return false;
     }
-    if (blk_pread(blk, idx * s->geo.stride, s->geo.stride, buf, 0) < 0) {
+    /* every page known erased or in the marker map: no host read */
+    for (k = 0; k < n; k++) {
+        erased[k] = test_bit(idx + k, s->blank[ch][ce]);
+        if (!erased[k] && !(s->mpages[ch][ce] && nand_map_get(s, ch, ce, idx + k, buf + (size_t)k * stride))) {
+            break;
+        }
+    }
+    if (k == n) {
+        for (k = 0; k < n; k++) {
+            if (erased[k]) {
+                memset(buf + (size_t)k * stride, 0xff, stride);
+                nand_stat(s, NS_READ_BLANK, 0);
+            } else {
+                nand_stat(s, NS_READ_MAP, 0);
+            }
+        }
+        return true;
+    }
+    if (blk_pread(blk, idx * stride, (int64_t)n * stride, buf, 0) < 0) {
         return false;
     }
-    *erased = true;
-    for (i = 0; i < s->geo.stride; i++) {
-        buf[i] ^= 0xff;
-        if (buf[i] != 0xff) {
-            *erased = false;
+    nand_stat_n(s, NS_READ, n, t0);
+    qatomic_set(&s->last_read_ns, nand_clock());
+    for (k = 0; k < n; k++) {
+        uint8_t *p = buf + (size_t)k * stride;
+
+        erased[k] = true;
+        for (i = 0; i < stride; i++) {
+            p[i] ^= 0xff;
+            if (p[i] != 0xff) {
+                erased[k] = false;
+            }
+        }
+        if (erased[k]) {
+            set_bit(idx + k, s->blank[ch][ce]);
+        } else if (s->mpages[ch][ce]) {
+            nand_map_note(s, ch, ce, idx + k, p, false, false);
         }
     }
     return true;
+}
+
+/* The page as on flash (data then meta); true when readable, *erased when all 0xff. */
+static bool nand_read_page(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t row, uint8_t *buf, bool *erased)
+{
+    return nand_read_pages(s, ch, ce, nand_page_index(s, row), 1, buf, erased);
 }
 
 /* Program: input zeros clear bits, as flash does (old & input); bytes beyond len are left alone. */
@@ -528,18 +1097,29 @@ static bool nand_program_page(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t 
     BlockBackend *blk = nand_chip(s, ch, ce);
     int64_t idx = nand_page_index(s, row);
     g_autofree uint8_t *cur = g_malloc(s->geo.stride);
+    int64_t t0 = nand_clock();
     uint32_t i;
+    bool ok;
+
+    bool blank;
 
     if (!blk || idx < 0 || len > s->geo.stride) {
         return false;
     }
-    if (blk_pread(blk, idx * s->geo.stride, len, cur, 0) < 0) {
+    blank = test_bit(idx, s->blank[ch][ce]);
+    if (blank) {
+        memset(cur, 0, len);                    /* erased, as stored */
+    } else if (blk_pread(blk, idx * s->geo.stride, len, cur, 0) < 0) {
         return false;
     }
     for (i = 0; i < len; i++) {
         cur[i] = cur[i] | (in[i] ^ 0xff);    /* stored XOR 0xff: a cleared bit is a set stored bit */
     }
-    return blk_pwrite(blk, idx * s->geo.stride, len, cur, 0) >= 0;
+    ok = blk_pwrite(blk, idx * s->geo.stride, len, cur, 0) >= 0;
+    clear_bit(idx, s->blank[ch][ce]);           /* even on failure: the page is no longer known */
+    nand_map_note(s, ch, ce, idx, ok && len == s->geo.stride ? cur : NULL, true, true);
+    nand_stat(s, blank ? NS_PROGRAM_BLANK : NS_PROGRAM, t0);
+    return ok;
 }
 
 static bool nand_erase_block(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t row)
@@ -547,23 +1127,32 @@ static bool nand_erase_block(S5L8940IOPState *s, int ch, uint32_t ce, uint32_t r
     BlockBackend *blk = nand_chip(s, ch, ce);
     int64_t idx = nand_page_index(s, row & ~((1u << s->geo.page_bits) - 1));
     int64_t len = (int64_t)s->geo.pages_per_block * s->geo.stride;
-    g_autofree uint8_t *buf = NULL;
-    int64_t i;
+    int64_t t0 = nand_clock();
+    bool ok;
 
     if (!blk || idx < 0) {
         return false;
     }
-    /* An erased block is a hole; zeroing it again would make it real on a host with no unmap. */
-    buf = g_malloc(len);
-    if (blk_pread(blk, idx * s->geo.stride, len, buf, 0) < 0) {
-        return false;
-    }
-    for (i = 0; i < len && !buf[i]; i++) {
-    }
-    if (i == len) {
+    s->erases[ch][ce][idx / s->geo.pages_per_block]++;
+    if (find_next_zero_bit(s->blank[ch][ce], idx + s->geo.pages_per_block, idx) >= idx + s->geo.pages_per_block) {
+        nand_map_erase(s, ch, ce, idx);       /* after the store changed: the scan's check */
+        nand_stat(s, NS_ERASE_HOLE, t0);
         return true;
     }
-    return blk_pwrite_zeroes(blk, idx * s->geo.stride, len, BDRV_REQ_MAY_UNMAP) >= 0;
+    /*
+     * Not known to be a hole: zeros, through the host's cache. (This read the block first, 1 MiB, to
+     * leave a hole alone on a host with no unmap; the holes are known from the open on now, and the
+     * read of a block the guest had written was a seek on a hard disk: 68 ms an erase in a GC-heavy
+     * session. Punching a hole instead, FSCTL_SET_ZERO_DATA, wrote the range back synchronously first
+     * and cost more.)
+     */
+    ok = blk_pwrite_zeroes(blk, idx * s->geo.stride, len, BDRV_REQ_MAY_UNMAP) >= 0;
+    if (ok) {
+        bitmap_set(s->blank[ch][ce], idx, s->geo.pages_per_block);
+    }
+    nand_map_erase(s, ch, ce, idx);
+    nand_stat(s, NS_ERASE, t0);
+    return ok;
 }
 
 /* ---- commands ------------------------------------------------------------- */
@@ -836,8 +1425,50 @@ static bool fmi_aes_page(S5L8940IOPState *s, QCryptoCipher *c, hwaddr cmd, uint3
     if (qcrypto_cipher_setiv(c, iv, sizeof(iv), NULL) < 0) {
         return false;
     }
+    nand_stat(s, NS_AES, 0);
     return (encrypt ? qcrypto_cipher_encrypt(c, buf, buf, s->geo.lpn_bytes, NULL)
                     : qcrypto_cipher_decrypt(c, buf, buf, s->geo.lpn_bytes, NULL)) == 0;
+}
+
+/*
+ * Pages a PPN command programs into erased pages that follow each other in the chip
+ * file (the FTL fills a block page after page), gathered and written with one host
+ * write; entry[] are the command entries whose status waits for that write.
+ */
+typedef struct PageRun {
+    uint32_t ce, n;
+    int64_t idx;
+    uint8_t *buf;
+    hwaddr entry[128];
+} PageRun;
+
+static uint8_t nand_flush_run(S5L8940IOPState *s, int ch, PageRun *r)
+{
+    BlockBackend *blk = nand_chip(s, ch, r->ce);
+    int64_t t0 = nand_clock();
+    uint8_t st, all = 0;
+    uint32_t k;
+
+    if (!r->n) {
+        return 0;
+    }
+    st = blk && blk_pwrite(blk, r->idx * s->geo.stride, (int64_t)r->n * s->geo.stride, r->buf, 0) >= 0
+         ? PPN_ST_DONE : PPN_ST_ERROR;
+    bitmap_clear(s->blank[ch][r->ce], r->idx, r->n);
+    for (k = 0; k < r->n; k++) {
+        nand_map_note(s, ch, r->ce, r->idx + k, st == PPN_ST_DONE ? r->buf + (size_t)k * s->geo.stride : NULL,
+                      true, true);
+    }
+    nand_stat_n(s, NS_PROGRAM_BLANK, r->n, t0);
+    for (k = 0; k < r->n; k++) {
+        address_space_write(&address_space_memory, r->entry[k] + PPN_ENTRY_STATUS, MEMTXATTRS_UNSPECIFIED, &st, 1);
+        if (st & PPN_ST_ERROR) {
+            nand_stat(s, NS_ERROR, 0);
+        }
+        all |= st;
+    }
+    r->n = 0;
+    return all;
 }
 
 static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
@@ -848,6 +1479,11 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
     uint32_t chip_ce[2] = { iop_lduw(pc + PPN_CMD_CHIP(0)), iop_lduw(pc + PPN_CMD_CHIP(1)) };
     uint32_t lpn_bytes = g->lpn_bytes, lpns = g->page_bytes / lpn_bytes, lpn_meta = g->meta_bytes / lpns;
     g_autofree uint8_t *page = g_malloc(NAND_MAX_PAGE);
+    g_autofree uint8_t *runbuf = NULL;
+    bool run_erased[PPN_MAX_PAGES];
+    uint32_t run_ce = 0, run_n = 0;
+    int64_t run_idx = 0;
+    PageRun wrun = { 0 };
     SegCursor data, meta;
     uint8_t overall = 0;
     uint32_t j, k, ivn = 0;
@@ -855,6 +1491,10 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
 
     if (!s->have_store || n == 0 || n > PPN_MAX_PAGES) {
         return FMI_STATUS_INVALID;
+    }
+    if (op != FMI_OP_PPN_ERASE) {
+        runbuf = g_malloc((size_t)PPN_MAX_PAGES * g->stride);
+        wrun.buf = runbuf;
     }
     seg_cursor_init(s, &data, cmd, 0x1c);
     seg_cursor_init(s, &meta, cmd, 0x24);
@@ -864,15 +1504,39 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
         uint32_t ce = CE_INDEX(chip_ce[iop_ldub(e + PPN_ENTRY_CHIP) & 1]);
         uint32_t first = iop_lduw(e + PPN_ENTRY_COL) / (lpn_bytes + lpn_meta);
         uint32_t count = iop_ldub(e + PPN_ENTRY_LPAGES);
+        int64_t idx = nand_page_index(s, row);
         uint8_t st;
-        bool erased = false;
+        bool erased = false, ok;
 
         if (first + count > lpns) {
             count = first < lpns ? lpns - first : 0;
         }
         switch (op) {
         case FMI_OP_PPN_READ:
-            if (nand_read_page(s, ch, ce, row, page, &erased)) {
+            /* the pages that follow this one in the chip file and in the command: one host read */
+            if (idx < 0 || !run_n || ce != run_ce || idx < run_idx || idx >= run_idx + run_n) {
+                uint32_t m = 1;
+
+                while (idx >= 0 && j + m < n) {
+                    hwaddr f = pc + PPN_CMD_ENTRY(j + m);
+
+                    if (CE_INDEX(chip_ce[iop_ldub(f + PPN_ENTRY_CHIP) & 1]) != ce ||
+                        nand_page_index(s, iop_ldl(f + PPN_ENTRY_ROW)) != idx + m) {
+                        break;
+                    }
+                    m++;
+                }
+                ok = nand_read_pages(s, ch, ce, idx, m, runbuf, run_erased);
+                run_ce = ce;
+                run_idx = idx;
+                run_n = ok ? m : 0;
+            }
+            ok = run_n && ce == run_ce && idx >= run_idx && idx < run_idx + run_n;
+            if (ok) {
+                memcpy(page, runbuf + (size_t)(idx - run_idx) * g->stride, g->stride);
+                erased = run_erased[idx - run_idx];
+            }
+            if (ok) {
                 st = erased ? PPN_ST_DONE | PPN_ST_CLEAN : PPN_ST_DONE;
                 for (k = first; k < first + count; k++) {
                     if (!erased && !nand_serve_marker(s, page + k * lpn_bytes) && aes &&
@@ -898,6 +1562,22 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
                 }
                 ivn++;
             }
+            if (st == PPN_ST_DONE && idx >= 0 && test_bit(idx, s->blank[ch][ce]) &&
+                (!wrun.n || (ce == wrun.ce && idx == wrun.idx + wrun.n))) {
+                /* into an erased page right after the run's: joins the run, its status comes with the write */
+                if (!wrun.n) {
+                    wrun.ce = ce;
+                    wrun.idx = idx;
+                }
+                for (k = 0; k < g->stride; k++) {
+                    wrun.buf[(size_t)wrun.n * g->stride + k] = page[k] ^ 0xff;
+                }
+                wrun.entry[wrun.n++] = e;
+                TRACE_PRINTF(trace_s5l8940_iop_log, "ppn write ch%d ce%u row 0x%08x lpn %u+%u -> run%s\n",
+                             ch, ce, row, first, count, aes ? " aes" : "");
+                continue;
+            }
+            overall |= nand_flush_run(s, ch, &wrun);
             if (st == PPN_ST_DONE && !nand_program_page(s, ch, ce, row, page, g->stride)) {
                 st = PPN_ST_ERROR;
             }
@@ -910,8 +1590,12 @@ static uint32_t fmi_ppn_command(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t
                      op == FMI_OP_PPN_READ ? "read" : op == FMI_OP_PPN_WRITE ? "write" : "erase",
                      ch, ce, row, first, count, st, aes ? " aes" : "");
         address_space_write(&address_space_memory, e + PPN_ENTRY_STATUS, MEMTXATTRS_UNSPECIFIED, &st, 1);
+        if (st & PPN_ST_ERROR) {
+            nand_stat(s, NS_ERROR, 0);
+        }
         overall |= st;
     }
+    overall |= nand_flush_run(s, ch, &wrun);
     address_space_write(&address_space_memory, pc + PPN_CMD_STATUS, MEMTXATTRS_UNSPECIFIED, &overall, 1);
     iop_stl(cmd + 0x64, overall);
     return (overall & PPN_ST_ERROR) ? 0x80000020 : FMI_STATUS_OK;
@@ -971,6 +1655,9 @@ static uint32_t fmi_single(S5L8940IOPState *s, int ch, hwaddr cmd, uint32_t op)
         ok = nand_program_page(s, ch, ce, row, page, g->stride);
         break;
     }
+    if (!ok) {
+        nand_stat(s, NS_ERROR, 0);
+    }
     TRACE_PRINTF(trace_s5l8940_iop_log, "ppn single op %u ch%d ce%u row 0x%08x -> %s%s\n", op, ch, ce, row,
                  ok ? "ok" : "error", erased ? " blank" : "");
     return !ok ? 0x80000020 : erased ? FMI_STATUS_BLANK : FMI_STATUS_OK;
@@ -999,6 +1686,7 @@ static void iop_fmi_command(S5L8940IOPState *s, int ch, hwaddr item)
 {
     uint32_t op = iop_ldl(item + CMD_OPCODE);
     uint32_t st;
+    int64_t t0 = nand_clock();
 
     switch (op) {
     case FMI_OP_SET_CONFIG:
@@ -1058,6 +1746,7 @@ static void iop_fmi_command(S5L8940IOPState *s, int ch, hwaddr item)
     trace_s5l8940_iop_fmi_cmd(ch, op, iop_ldl(item + CMD_ARG(0)), iop_ldl(item + CMD_ARG(1)),
                               iop_ldl(item + CMD_ARG(2)), iop_ldl(item + CMD_ARG(3)), st);
     iop_stl(item + CMD_STATUS, st);
+    nand_stat(s, NS_CMD, t0);
 }
 
 /* ---- rings ---------------------------------------------------------------- */
@@ -1253,6 +1942,8 @@ static void s5l8940_iop_reset(DeviceState *dev)
     timer_del(s->irq_timer);
 }
 
+static void s5l8940_iop_exit(Notifier *n, void *data);
+
 static void s5l8940_iop_realize(DeviceState *dev, Error **errp)
 {
     S5L8940IOPState *s = S5L8940_IOP(dev);
@@ -1266,6 +1957,8 @@ static void s5l8940_iop_realize(DeviceState *dev, Error **errp)
         if (*errp) {
             return;
         }
+        s->exit_notifier.notify = s5l8940_iop_exit;
+        qemu_add_exit_notifier(&s->exit_notifier);
     }
     qdev_init_gpio_in_named(dev, iop_doorbell, "doorbell", 1);
 }
@@ -1292,12 +1985,100 @@ static void s5l8940_iop_finalize(Object *obj)
             }
         }
     }
+    for (ch = 0; ch < NAND_MAX_CHANNELS; ch++) {
+        for (ce = 0; ce < NAND_MAX_CE; ce++) {
+            g_free(s->erases[ch][ce]);
+            g_free(s->blank[ch][ce]);
+            g_free(s->bgen[ch][ce]);
+            if (s->mpages[ch][ce]) {
+                g_hash_table_destroy(s->mpages[ch][ce]);
+            }
+        }
+    }
     for (ch = 0; ch < s->nsources; ch++) {
         blk_detach_dev(s->source[ch], DEVICE(s));
         blk_unref(s->source[ch]);
     }
     timer_free(s->irq_timer);
     g_free(s->nand_dir);
+}
+
+/* The session's store statistics as one line of "name count/ms" pairs, then the wear. */
+static char *nand_report(S5L8940IOPState *s)
+{
+    GString *r = g_string_new(NULL);
+    uint64_t blocks = 0, touched = 0, total = 0;
+    uint32_t most = 0;
+    int k, ch, ce;
+
+    if (!s->have_store) {
+        return g_string_free(r, false);
+    }
+    g_string_append_printf(r, "store %.1f s open, guest %.1f s:", (nand_clock() - s->opened_ns) / 1e9,
+                           qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1e9);
+    for (k = 0; k < NS_KINDS; k++) {
+        g_string_append_printf(r, " %s %" PRIu64, nand_stat_names[k], s->stat_n[k]);
+        if (s->stat_ns[k]) {
+            g_string_append_printf(r, "/%.0fms", s->stat_ns[k] / 1e6);
+        }
+    }
+    for (ch = 0; ch < s->geo.channels; ch++) {
+        for (ce = 0; ce < s->geo.ce_per_channel; ce++) {
+            uint64_t b, n = (uint64_t)s->geo.caus_per_ce * s->geo.blocks_per_cau;
+
+            for (b = 0; s->erases[ch][ce] && b < n; b++) {
+                uint32_t e = s->erases[ch][ce][b];
+
+                blocks++;
+                touched += e != 0;
+                total += e;
+                most = MAX(most, e);
+            }
+        }
+    }
+    if (s->mpages[0][0]) {
+        int64_t done = qatomic_read(&s->scan_done_ns);
+        uint64_t mapped = 0;
+
+        qemu_mutex_lock(&s->map_lock);
+        for (ch = 0; ch < s->geo.channels; ch++) {
+            for (ce = 0; ce < s->geo.ce_per_channel; ce++) {
+                mapped += g_hash_table_size(s->mpages[ch][ce]);
+            }
+        }
+        qemu_mutex_unlock(&s->map_lock);
+        g_string_append_printf(r, "; page map %" PRIu64 " marker pages", mapped);
+        if (s->map_loaded) {
+            g_string_append_printf(r, " (%" PRIu64 " from pagemap.bin)", s->map_loaded);
+        } else {
+            g_string_append_printf(r, ", scan %" PRIu64 " MB", qatomic_read(&s->scan_bytes) >> 20);
+            if (done) {
+                g_string_append_printf(r, " in %.1f s", (done - s->opened_ns) / 1e9);
+            }
+        }
+    }
+    g_string_append_printf(r, "; wear: %" PRIu64 " of %" PRIu64 " blocks erased, %.2f erases each on average, "
+                           "%u at most; markers bad %" PRIu64, touched, blocks,
+                           touched ? (double)total / touched : 0.0, most, s->markers_bad);
+    return g_string_free(r, false);
+}
+
+static char *s5l8940_iop_get_stats(Object *obj, Error **errp)
+{
+    return nand_report(S5L8940_IOP(obj));
+}
+
+static void s5l8940_iop_exit(Notifier *n, void *data)
+{
+    S5L8940IOPState *s = container_of(n, S5L8940IOPState, exit_notifier);
+    g_autofree char *r = nand_report(s);
+
+    if (*r) {
+        info_report("s5l8940.iop: %s", r);
+    }
+    if (s->mpages[0][0]) {
+        nand_map_save(s);
+    }
 }
 
 static const VMStateDescription vmstate_s5l8940_iop = {
@@ -1321,6 +2102,7 @@ static const Property s5l8940_iop_props[] = {
     DEFINE_PROP_UINT32("ap-vector", S5L8940IOPState, ap_vector, S5L8940_IRQ_IOP),
     DEFINE_PROP_UINT32("window-offset", S5L8940IOPState, window_offset, 0x40000000),
     DEFINE_PROP_STRING("nand", S5L8940IOPState, nand_dir),
+    DEFINE_PROP_BOOL("page-map", S5L8940IOPState, page_map, true),
 };
 
 static void s5l8940_iop_class_init(ObjectClass *klass, const void *data)
@@ -1331,6 +2113,7 @@ static void s5l8940_iop_class_init(ObjectClass *klass, const void *data)
     dc->realize = s5l8940_iop_realize;
     dc->vmsd = &vmstate_s5l8940_iop;
     device_class_set_legacy_reset(dc, s5l8940_iop_reset);
+    object_class_property_add_str(klass, "store-stats", s5l8940_iop_get_stats, NULL);
 }
 
 static const TypeInfo s5l8940_iop_info = {

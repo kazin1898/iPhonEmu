@@ -459,6 +459,62 @@ AES the kernel asks the FMI for. Their catalog records were on the NAND, their d
 - Checked on a new v2 unit over the GL bridge (`runs/n94/progress/2026-10-18_AES_*`): Setup walked, QMP
   `quit`, the next boot at the lock screen, the home screen with the wallpaper and the whole Calendar icon.
 
+## Storage: the page store on the host (2026-10-19)
+
+What the FTL costs the PC, measured with the model's own counters (`store-stats`, a QOM property of
+`/machine/iop`, and one line on QEMU's stderr at exit: pages read, programmed, erased, served as markers,
+through the AES, page errors, and the host time of each) on 16 GiB units whose stores sit on the host's
+hard disk (E:, an HDD) with the firmware on its SSD. A cold random 8 KiB page read on that disk costs about
+13 ms, a cached one 9 us.
+
+| | before (2026-10-18) | after |
+|---|---|---|
+| `device create` (install boot: FTL format, 312,445 markers, data volume, keybag) | 97 s; the store 52 s of the 87 s boot | 69 s; the store 29 s of 64 s |
+| new unit's first boot to Setup's welcome ("iPhone", slide to set up) | 175 s; the store 68 s, 33,125 host page reads | 115-120 s; the store 8 s, 1,831 host page reads |
+| normal boot of `gl5` to the lock screen | still on the boot logo at 120 s | 70 s (110 s on a session with no `pagemap.bin`, below) |
+| install boot of a 4 GiB unit whose FTL must collect garbage (`device refresh`) | 135-153 s, 1,240 erases in 81-85 s | 78-97 s, 1,284 erases in 14-35 s |
+
+Where it went, and what changed in `hw/arm/s5l8940_iop.c`:
+
+- **Programs read before writing.** Flash programming only clears bits, so every program read the page
+  back first. The sparse chip files' holes are erased pages (stored XOR 0xff), so at open the store asks
+  the host which ranges are allocated (`FSCTL_QUERY_ALLOCATED_RANGES` on Windows, `SEEK_DATA`/`SEEK_HOLE`
+  elsewhere) and keeps a per-page bitmap of pages known erased; an erase sets its block's bits, a program
+  clears its page's. A page known erased is read as 0xff with no I/O, programmed with one write and no
+  read, and a block known erased is erased with no I/O at all (16,384 such erases in a format).
+- **Erases read the block.** To leave a hole alone, each erase read the whole 1 MiB block and wrote
+  zeros only if it found data; on a block the guest had written (garbage collection) that read was a seek
+  and the erase cost 68 ms. With the holes known, an erase writes its zeros through the host's cache with
+  no read (11-27 ms). Punching a hole instead (`FSCTL_SET_ZERO_DATA`) was tried and was slower: NTFS writes
+  the range's dirty cache back synchronously before it deallocates.
+- **One host I/O per run of pages.** A PPN read or program command moves up to 128 pages; the pages that
+  follow each other in the chip file (the FTL fills a block page after page) now go in one read, or in one
+  write when they are erased pages being programmed.
+- **The marker pages.** About 21,000 of the 25,000 pages a first boot reads are system-volume marker pages
+  (B3), and each read went to the chip file only to find 28 bytes of marker and the page's meta: on the
+  HDD, a seek apiece. The store now keeps a map of the stored pages that are whole marker pages (every
+  logical page an exact marker, the rest zeros): their meta and the {source, block} of each logical page,
+  48 bytes a page, 8.7 MB for a unit. Reading such a page rebuilds it from the map and reads only its
+  source (the IPSW's `rootfs.hfs`). Programs and erases update the map and bump the block's generation.
+  Between sessions the map is `pagemap.bin` beside the store: written at QEMU's exit (also after the
+  guest's own power-off) and deleted as soon as it is loaded, so a session that ends without its exit (a
+  killed QEMU, a host crash) leaves none. Without one, a thread scans the store at low I/O priority,
+  giving way to the guest's reads (1.4-1.7 GB in 32-40 s on the HDD), and adds the marker pages of every
+  block whose generation did not change while it read. Pages the guest reads are added as they come. The
+  install boot programs the markers through the store, so a new unit's first boot already has the map.
+- **The host's cache does not hold the store.** A read-ahead thread that read every allocated range at
+  start (to warm Windows' file cache for the guest) was tried first: the pages were gone again within
+  minutes, and in a thread in background mode Windows also gives what it reads low memory priority, so
+  the guest's reads stayed cold. Hence the map in the model's own memory.
+
+**A long session** (`wear4`, a 4 GiB unit of 976,563 sectors; `device create` then 12
+`device refresh`, each rewriting all 312,445 markers, 1.2 GB, into an FTL with 3.7 GB, so from the second on
+the FTL collects garbage): about 157,000 page programs and 1,200-1,290 block erases (garbage collection)
+in each session, 2 million programs in all. In every session: 0 page errors, 0 bad markers, the data
+volume's `fsck_hfs -fy` "appears to be OK" and the keybag found. Wear per session: 1,200-1,290 of the 4,096
+blocks erased, 1.01-1.02 erases each on average and 2 at most, so the FTL spreads its erases. (The model
+counts erases per block for a session only; a lifetime count would need them in the store.)
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
