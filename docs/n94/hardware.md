@@ -659,7 +659,10 @@ does to start cpu1, as traced and decoded:
   after. Still on the table for speed: the kernel's `TLBIMVAIS` loops (0x80087350), each a cross-vCPU
   flush in QEMU (exclusive work per page).
 - **The lock screen** (`gl6` past Setup, `device boot`): reached 54-55 s after the command with two cores,
-  78 s with one. Ten minutes there with two cores, the panel woken by Home every minute: 10 of 10 wakes,
+  78 s with one. Six boots alternating (`runs/n94/usb/perf.py`, screendumps every ~0.3 s): lock screen at
+  55.7 / 55.7 / 59.1 s on two cores against 77.2 / 78.8 / 80.0 s on one (mean 56.8 against 78.7 s, 1.39x),
+  and Ajustes' first launch after boot, tap to a still screen, 1.10 / 1.05 / 1.08 s against 2.23 / 1.74 /
+  1.63 s (1.08 against 1.87 s, 1.73x). Ten minutes there with two cores, the panel woken by Home every minute: 10 of 10 wakes,
   SpringBoard, backboardd and mediaserverd alive, no panic, `hw.ncpu 2` at the end. Not SMP's: with one
   core as with two, mediaserverd is sometimes killed by CoreMedia's 9 s RPC timeout ("fig rpc timeout --
   playerremote_CopyProperty [ CallIsActive ]", read from the unit's own report through `dump-writes`), more
