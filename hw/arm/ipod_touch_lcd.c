@@ -549,6 +549,11 @@ static int lcd_bright_effective(void)
     return ovr >= 0 ? ovr : lcd_brightness;
 }
 
+int it_display_rotation(void)
+{
+    return qatomic_read(&it_display_rotation_req);
+}
+
 void it_display_set_orientation(uint32_t orientation)
 {
     int rot;

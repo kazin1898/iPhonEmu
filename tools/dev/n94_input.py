@@ -3,7 +3,8 @@
 
   n94_input.py [--port 4444] COMMAND ...
 
-Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top left):
+Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top left, however the device is
+turned: the window turns with it, and so does the pointer):
   tap X Y [--hold MS]            press and lift finger 0
   swipe X1 Y1 X2 Y2 [--ms 400]   press, move in steps, rest, lift (iOS 6 reads a lift while moving as a flick)
   key NAME [--hold MS]           press a button: home, power, volup, voldown (the machine's keys:
@@ -14,6 +15,8 @@ Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top le
                                  "slide to power off"; the guest shuts down, the PMU model powers off and QEMU
                                  exits by itself (about 25 s), with the FTL flushed, unlike quit
   ring silent|ring               the ring/silent side switch (the machine's ring-switch property; Cmd+M in the window)
+  turn 1|2|3|4                   the device's orientation (UIDeviceOrientation: portrait, upside down, landscape
+                                 left = home button right, landscape right); Cmd/Ctrl+Left/Right in the window
   status | quit                  QMP query-status / quit (the logs flush on quit; for the guest a power cut)
   wait SECS                      sleep on the host (to chain steps in one call)
   keepalive [SECS [X Y]]         tap X Y (320 85, a navigation bar's title) every SECS (20) seconds, forever;
@@ -59,9 +62,20 @@ class Qmp:
             raise RuntimeError(f"{execute}: {r['error']}")
         return r.get("return")
 
-    def pointer(self, x, y, down=None):
-        ev = [{"type": "abs", "data": {"axis": "x", "value": round(x * 32767 / (W - 1))}},
-              {"type": "abs", "data": {"axis": "y", "value": round(y * 32767 / (H - 1))}}]
+    def rotation(self):
+        """Degrees clockwise the window shows the panel turned (the accelerometer's orientation)."""
+        try:
+            o = self.cmd("qom-get", path="/machine/accelerometer", property="orientation")
+        except RuntimeError:
+            return 0
+        return {2: 180, 3: 270, 4: 90}.get(o, 0)
+
+    def pointer(self, x, y, down=None, rot=0):
+        """Panel pixels (portrait) to the pointer, which covers the window as the device is turned."""
+        px, py = x / (W - 1), y / (H - 1)
+        cx, cy = {0: (px, py), 90: (1 - py, px), 180: (1 - px, 1 - py), 270: (py, 1 - px)}[rot]
+        ev = [{"type": "abs", "data": {"axis": "x", "value": round(cx * 32767)}},
+              {"type": "abs", "data": {"axis": "y", "value": round(cy * 32767)}}]
         if down is not None:
             ev.append({"type": "btn", "data": {"down": down, "button": "left"}})
         self.cmd("input-send-event", events=ev)
@@ -74,10 +88,11 @@ def run(q, argv):
         ap.add_argument("x", type=float); ap.add_argument("y", type=float)
         ap.add_argument("--hold", type=int, default=120)
         a = ap.parse_args(argv[1:])
-        q.pointer(a.x, a.y)
-        q.pointer(a.x, a.y, True)
+        rot = q.rotation()
+        q.pointer(a.x, a.y, rot=rot)
+        q.pointer(a.x, a.y, True, rot)
         time.sleep(a.hold / 1000)
-        q.pointer(a.x, a.y, False)
+        q.pointer(a.x, a.y, False, rot)
     elif op == "swipe":
         ap = argparse.ArgumentParser(prog="swipe")
         for n in ("x1", "y1", "x2", "y2"):
@@ -85,13 +100,14 @@ def run(q, argv):
         ap.add_argument("--ms", type=int, default=400)
         ap.add_argument("--steps", type=int, default=16)
         a = ap.parse_args(argv[1:])
-        q.pointer(a.x1, a.y1)
-        q.pointer(a.x1, a.y1, True)
+        rot = q.rotation()
+        q.pointer(a.x1, a.y1, rot=rot)
+        q.pointer(a.x1, a.y1, True, rot)
         for i in range(1, a.steps + 1):
             time.sleep(a.ms / 1000 / a.steps)
-            q.pointer(a.x1 + (a.x2 - a.x1) * i / a.steps, a.y1 + (a.y2 - a.y1) * i / a.steps)
+            q.pointer(a.x1 + (a.x2 - a.x1) * i / a.steps, a.y1 + (a.y2 - a.y1) * i / a.steps, rot=rot)
         time.sleep(0.25)
-        q.pointer(a.x2, a.y2, False)
+        q.pointer(a.x2, a.y2, False, rot)
     elif op == "key":
         ap = argparse.ArgumentParser(prog="key")
         ap.add_argument("name", choices=sorted(KEYS))
@@ -125,6 +141,9 @@ def run(q, argv):
             run(q, ["key", "home"])
             time.sleep(3)
     elif op == "poweroff":
+        if q.rotation():                     # the slider is drawn for portrait: stand the device up first
+            run(q, ["turn", "1"])
+            time.sleep(2)
         run(q, ["key", "home"])
         time.sleep(1.5)
         run(q, ["key", "power", "--hold", "4000"])
@@ -134,6 +153,8 @@ def run(q, argv):
         if len(argv) < 2 or argv[1] not in ("silent", "ring"):
             sys.exit("ring silent|ring")
         q.cmd("qom-set", path="/machine", property="ring-switch", value=argv[1] == "silent")
+    elif op == "turn":
+        q.cmd("qom-set", path="/machine/accelerometer", property="orientation", value=int(argv[1]))
     elif op == "status":
         print(q.cmd("query-status"))
     elif op == "quit":

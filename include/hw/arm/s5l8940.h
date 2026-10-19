@@ -61,6 +61,11 @@
 #define S5L8940_DSIM_BASE        0x39500000   /* mipi-dsim-1,samsung */
 #define S5L8940_SAC_BASE         0x3f110000   /* mipi-dsim reg[1]: the panel clock's slow adaptive clocking */
 #define S5L8940_DART_NRT_BASE    0x38b00000   /* dart-nrt: mapper-jpeg, mapper-scaler */
+#define S5L8940_SCALER_BASE(n)   (0x38300000 + (n) * 0x100000)   /* scaler0, scaler1 */
+#define S5L8940_IRQ_SCALER(n)    (9 + (n))
+#define S5L8940_JPEG_BASE        0x38200000
+#define S5L8940_I2S_SWITCH_BASE  0x3fa01000   /* i2s-switch, 0x1000 */
+#define S5L8940_IRQ_JPEG         118
 #define S5L8940_DART_RT_BASE     0x3a400000   /* dart-rt: mapper-isp */
 #define S5L8940_IRQ_TVOUT        40
 #define S5L8940_IRQ_DSIM         41

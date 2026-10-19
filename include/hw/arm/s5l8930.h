@@ -233,6 +233,11 @@ void s5l8930_hdq_set_device_type(Chardev *chr, uint16_t type);
  * sysbus IRQ 0 = pipe (S5L8930_IRQ_DISP_PIPE0), 1 = CLCD, 2 = RGBOUT pipe.
  */
 #define TYPE_S5L8930_DISPLAY "s5l8930.display"
+/*
+ * The panel's backlight, 0 (off) to 255 (full), as the board's backlight driver set it: the console shows
+ * every pixel scaled by it, as the panel would (255 at reset, iBoot's level).
+ */
+void s5l8930_display_set_backlight(DeviceState *dev, uint8_t level);
 
 /*
  * CDMA + AES filter (hw/arm/s5l8930_cdma.c). MMIO 0 = channel block

@@ -563,8 +563,6 @@ the lock screen came at 110 s.)
 | `wlan ... resetWaitTillEnumeration(): Error (I/O timeout) waiting for bus to attach`, `Bus enumeration failure` | no BCM4330 behind the HSIC port | yes, by design (radios are stubs) |
 | `hsic-baseband ... device has not connected after 1500ms` | no baseband | yes, by design |
 | `AppleH4CamIn::power_on_hardware - ISP_Init failed: 0xE00002D6` (three times) | the camera ISP is not modeled | yes, unmodeled block |
-| `AppleJPEGHal::reset_jpeg_block() : SW Reset failed (2)` | the JPEG block (0x38200000) is not modeled | yes, unmodeled block |
-| `AppleM2ScalerCSCHal::setScalerPropertiesAndExtents() WARNING: Failed to find properties ... SOC 0x0` | the scalers are not modeled | yes, unmodeled block |
 | `AppleLIS331DLH::handleStart Expected calibration data but didn't find any.. Failing driver`, `AppleAP3GDL::probe -- Failed to Probe` | no factory calibration for the accelerometer and gyro (it lives in syscfg on a real unit) | yes |
 | `AppleTVOut::start ... Couldn't find video LDO function` | no TV-out on this board's DT | no (same on hardware) |
 | `[NAND] s_cxt_boot:88 sftl: error, unclean shutdown; adopted N spans` | the session before ended with no shutdown (QMP `quit`, a closed window, a kill) | gone after a power-off ("Power" above) |
@@ -856,6 +854,68 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
   progress bar, its boot overlay, and keeps it until the system app's first frame
   (`runs/n94/progress/2026-10-17_M3_primeiro-frame-logo.png`).
 
+## Display: backlight, orientation, the CLCD's third window, RGBOUT and TV-out (2026-10-19)
+
+- **Backlight.** The panel's level does not go through the PMU: the DT's `backlight_update` function is the DWI's
+  (`dwi` phandle, function `'dwiB'`), and AppleS5L8940XDWI sends it on channel 2 (and on channel 0, its synchronous
+  one) as `0x20000000 | (level & 3) << 9 | level >> 2`, or `0xa0000000 | level`, an 11-bit level (10B329 0x80cca770).
+  `n94.c` decodes it at the transfer's start (`+0x40`/`+0x10` <- 0x71) and the display model scales its output
+  through the gamma tables by level/2047 (`s5l8930_display_set_backlight`): what the window and a screendump show
+  dims as the panel would. The level is the machine's read-only `backlight` property; `-trace n94_dwi` logs every
+  transfer. Checked: 0x7a5 (1957) at boot, Ajustes > Brilho's slider down to 0x1f7 (503) with auto-brightness on,
+  back to 1581 (`runs/n94/progress/2026-10-19_DISPLAY_brilho-rotacao.png`).
+- **Orientation.** iOS turns its UI from the accelerometer, which it polls at 10 Hz. The LIS331DLH model's `mount`
+  had been an iPad's (`-2,1,3`): the 4S's DT `orientation` is -1 on every axis (`{0xff, 0xff00, 0xff0000}`; the
+  gyro's `{0xff, 0xff00, 0x10000}`), and the mount is the transpose of those rows, `-1,-2,-3` (gyro `-1,-2,3`).
+  With the iPad's, portrait read as landscape and no app turned. The accelerometer is `/machine/accelerometer`
+  (QOM `orientation`, UIDeviceOrientation 1-4); Cmd+Left/Right (or Ctrl+) turn the device a quarter turn and
+  `n94_input.py turn 1|2|3|4` sets it. The console turns with it (the display's `rotate-with-device`): iOS keeps its
+  framebuffer in portrait and turns the UI inside it, so a landscape app shows upright in a landscape window, and
+  the pointer and QMP touches are mapped back to the panel. Checked: Safari and Calculadora (its scientific keys)
+  in both landscapes and back.
+- **The CLCD's third window** (`clcd` reg[2], 0x39300000, 0x1000; new on the A5): AppleH4PCLCD writes zero to some
+  thirty words of it and reads them back around power states. A register file.
+- **RGBOUT and TV-out** were already the A4 model's (`s5l8930_display.c`: RGBOUT's own pipe at 0x3A200000, its
+  control block at 0x39600000, TV-out at 0x39400000): AppleRGBOUT starts, finds its TV-out and powers up and down
+  with no access outside the model. AppleTVOut stops at start, "Couldn't find video LDO function": the IPSW's
+  `tv-out` node has no `function-video_ldo` (iBoot does not add one either; the string is the kernel's only), so
+  that is the stock behaviour, not a missing register. No second console carries their output.
+- **Scalers and JPEG**, beside the display: the two M2 scalers (0x38300000, 0x38400000) and the JPEG codec
+  (0x38200000) were unmodeled (the driver loaded the scalers' coefficient tables into nothing, and AppleJPEGHal
+  polled the codec's reset 10,000 times at every boot before "SW Reset failed"). They are the A4 boards' models
+  now, behind dart-nrt (mapper-jpeg streams 0-1, mapper-scaler 2-3); the scalers report block version 0x20007
+  (the A4's; unmeasured on a 4S). `-d unimp` over a boot, unlock, an app, a turn and a lock shows nothing left in
+  the display's or the media blocks' windows; what is left is the camera's ISP (hidden), the video encoder, the
+  usb-complex and one write at 0x364002c0.
+
+## Audio: the PCM path to the host (2026-10-19)
+
+- **Where the PCM goes.** Not through the AE2. AppleARMIISAudio's engine (i2s0, whose `audio0` child is the
+  CS42L63) streams from DRAM into i2s0's TX FIFO (0x34190010) on CDMA channel 0x1f, 64 KiB chains re-armed from
+  the completion interrupt: the A4's path, which the CDMA model already paces in real time at the port's rate.
+  Two things kept it from the host. The A5's i2s-version 3 driver starts TX with `TXCOM` <- 0x01ff4a06 (FIFO
+  fields above the command byte 6), and the model took only an exact 6 as "running"; and no I2S port had
+  `audio-out`. The rate is NCO n's frequency word (64 * fs), which on the A5 sits at PMGR+0x114 + 0x10 n (10B329
+  writes 0x002b1100 there, 44.1 kHz), not at the A4's +0x104.
+- **To the host.** i2s0 has `audio-out` and takes the machine's `audiodev=`. `device boot` gives QEMU
+  `-audiodev dsound,id=snd0 -machine audiodev=snd0` on Windows (`--audio sdl|none|wav:FILE.wav`); QEMU's wav
+  backend leaves the RIFF sizes at 0 because the sound card holds it to the end, so `device boot` writes them when
+  QEMU exits (`device.fix_wav`). Before, an I2S with `audio-out` and no backend failed the machine's realize; now
+  it warns and drops the samples.
+- **Checked** (`runs/n94/progress/2026-10-19_AUDIO_pcm-no-host.png`, the WAV beside it): unlock, seven keys in
+  Notas (the keyboard clicks) and lock, 44.1 kHz stereo, peaks up to 19740. The volume buttons change the PCM
+  itself: lock and unlock with the ringer at its lowest peak at 7865 and 3672, at its highest 31222 and 12049.
+- **The codec** (CS42L63 at 0x4a on i2c0) stays a register file: iOS writes its power, routing and clock set-up
+  around each sound (`-trace cs42l58_log`) and no volume there, so nothing in it changes what the host plays.
+- **The i2s-switch** (0x3FA01000, AppleAE2MCA's routes between the ports, the codec, Highland Park and the
+  baseband) is a register file now; it was an unimplemented window.
+- **The AE2's rings 2-7** carry nothing in any of this, and that is the hardware's design, not a gap in the
+  model: besides the control ring, the AE2's EmbeddedIOP endpoints serve AppleSongbird's
+  `AppleEncryptedAACDecoder` (protected AAC decoded on the AE2, with the AAC codecs in its firmware) and the
+  `WFIEndpoint` AppleA5AE2 creates for putting the A5 in WFI while the AE2 plays. Unprotected audio (system sounds,
+  the keyboard, MP3/AAC files) is decoded on the AP and goes through i2s0. Modeling that decoder is decrypting
+  protected content, which this project leaves out.
+
 ## The AE2 (`AppleA5AE2-43.1`, EmbeddedIOP role AE2, M3 work 2026-10-18)
 
 Decoded from the 10B329 kexts (Ghidra; `AppleA5AE2::start` 0x8040148c, `startCPU` 0x80401b5c, its interrupt
@@ -895,7 +955,7 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
   slot. Checked with `runs/n94/usb/heavy.sh` (that cycle every minute) on `gl6`: 16 of 16 on two cores and
   8 of 8 on one, the panel waking each time and mediaserverd the same process throughout; every doorbell
   answered (`-trace 's5l8940_ae2*'`). The audio rings 2-7 still carry nothing: system sounds do not go
-  through them.
+  through them ("Audio: the PCM path to the host").
 - **I2S**: AppleSamsungI2S (i2s-version 3) stops a port by writing `+0x00` <- 0x34 and spinning with
   `IODelay(10)` until bit 1 (drained) is set: on the unimplemented window that pinned the CPU from the
   codec's start on. The four ports are now the A4's `s5l8930_i2s.c` at 0x34190000 + n * 0x1000.
@@ -910,8 +970,9 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
 2. ~~**PMGR timer / clock table**~~: done 2026-10-19 ("Platform"). Open: the 4S's real clock values (the
    slots' kinds are the kext's; the frequencies are plausible stand-ins).
 3. **Unmodeled blocks the kernel writes at boot** (reads come back 0, nothing complains): CDMA 0x37000008
-   and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000, i2s-switch 0x3FA01000-0x3FA0103C
-   (all 0). (The PL310 "cif" window, the DWI and arm-io's registers are modeled since 2026-10-19.) `AppleH4CamIn::start`
+   and 0x3700000c (one bit per channel, all 44), usb-complex 0x3F108000. (The PL310 "cif" window, the DWI and arm-io's
+   registers, and then the i2s-switch, the CLCD's third window, the scalers and the JPEG codec, are modeled since
+   2026-10-19: "Display: backlight, orientation ..." and "Audio: the PCM path to the host".) `AppleH4CamIn::start`
    (isp) and `AppleSamsungDPTXControllerS5L8940X` start without faulting on the unimplemented window.
 4. **PMU**: `hw/arm/s5l8940_d1881.c` models what AppleD1881PMU (text 0x80aea268, decompiled with the
    Ghidra project) is seen to use: EVENT_A..G at 0x01-0x07 (read 7 at once by the interrupt handler,
@@ -934,8 +995,8 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
 8. ~~**SMP**~~: done 2026-10-19 (section "SMP"): enable_core is the PMGR's `'Core'`, two vCPUs on MTTCG.
 9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and
-   mediaserverd start. Open: no PCM reaches the host (no I2S DMA was seen; i2s0 has no "audio-out" yet), and
-   the AE2's audio endpoints (rings 2-7) have not carried a message yet, so their protocol is unread.
+   mediaserverd start, and the PCM reaches the host through i2s0 ("Audio: the PCM path to the host"). The AE2's
+   rings 2-7 are its protected-AAC decoder and WFI endpoints, left out by design.
    (assistantd's kill at boot, first put down to this, was a 5 s audio-session timeout against the
    emulator's pace: "Boot: what a normal boot logs".)
 10. **Marker pages and the FTL's GC**: a marker page the FTL moves becomes a copy of the bytes it was

@@ -32,6 +32,7 @@
 #include "hw/arm/s5l8940.h"
 #include "hw/arm/ipod_touch_cs42l58.h"
 #include "hw/arm/ipod_touch_lis302dl.h"
+#include "hw/arm/ipod_touch_lcd.h"
 #include "hw/i2c/i2c.h"
 #include "hw/arm/ipod_touch_usb_otg.h"
 #include "hw/arm/ipod_touch_usb_phys.h"
@@ -51,6 +52,7 @@
 #include "ui/input.h"
 #include "qapi/visitor.h"
 #include "chardev/char.h"
+#include "trace.h"
 
 #define TYPE_N94_MACHINE MACHINE_TYPE_NAME("iPhone-4S")
 #define N94_MAX_CPUS 2                   /* the A5's two Cortex-A9s (DT cpus/cpu0, cpu1) */
@@ -74,8 +76,10 @@ struct N94MachineState {
     Object *pmu;                         /* the D1881 (its vbat-mv follows battery-level; its button events) */
     int battery_level;                   /* %, battery-level property */
     bool ring_silent;                    /* ring-switch: the side switch at silent (default off: ring) */
+    uint32_t backlight_level;            /* the panel backlight's 11-bit level, as the DWI last sent it */
     IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
-    bool kbd_cmd, kbd_shift;
+    LIS302DLState *accel;                /* the accelerometer: the device's orientation (Cmd/Ctrl+Left/Right) */
+    bool kbd_cmd, kbd_shift, kbd_ctrl;
     int kbd_btn_held[Q_KEY_CODE__MAX];   /* qcode -> 1 + button pin */
     int mtt_x[MT_MAX_FINGERS], mtt_y[MT_MAX_FINGERS];
     bool mtt_seen[MT_MAX_FINGERS];
@@ -203,17 +207,33 @@ static bool n94_kboot_video(const char *path, uint32_t *base, uint32_t *width, u
 }
 
 /*
+ * A point of the console (0..1 each way) on the panel: the console turns with the device
+ * (s5l8930_display's rotate-with-device, it_display_rotation degrees clockwise), the panel does not.
+ */
+static void n94_console_to_panel(float cx, float cy, float *px, float *py)
+{
+    switch (it_display_rotation()) {
+    case 90:  *px = cy;        *py = 1.0f - cx; break;
+    case 180: *px = 1.0f - cx; *py = 1.0f - cy; break;
+    case 270: *px = 1.0f - cy; *py = cx;        break;
+    default:  *px = cx;        *py = cy;        break;
+    }
+}
+
+/*
  * Touch from the host, as ipad1.c does it for the A4 boards: the QEMU pointer (absolute,
- * 0..32767 over the console, the console being the 640x960 panel in portrait) is finger 0,
+ * 0..32767 over the console, the 640x960 panel as the device is turned) is finger 0,
  * the left button pressing it; QMP input-send-event "mtt" events carry up to five fingers.
  * The digitizer's y runs bottom-up.
  */
 static void n94_mouse_event(void *opaque, int x, int y, int z, int buttons)
 {
     IPodTouchMultitouchState *mt = opaque;
+    float px, py;
 
-    mt->touch_x = x / 32768.0f;
-    mt->touch_y = 1.0f - y / 32768.0f;
+    n94_console_to_panel(x / 32768.0f, y / 32768.0f, &px, &py);
+    mt->touch_x = px;
+    mt->touch_y = 1.0f - py;
     if (buttons && !mt->touch_down) {
         ipod_touch_multitouch_on_touch(mt);
     } else if (!buttons && mt->touch_down) {
@@ -251,8 +271,12 @@ static void n94_mtt_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
         }
         down = mtt->type == INPUT_MULTI_TOUCH_TYPE_BEGIN ||
                mtt->type == INPUT_MULTI_TOUCH_TYPE_UPDATE;
-        ipod_touch_multitouch_set_finger(s->mt, slot, s->mtt_x[slot] / 32768.0f,
-                                         1.0f - s->mtt_y[slot] / 32768.0f, down);
+        {
+            float px, py;
+
+            n94_console_to_panel(s->mtt_x[slot] / 32768.0f, s->mtt_y[slot] / 32768.0f, &px, &py);
+            ipod_touch_multitouch_set_finger(s->mt, slot, px, 1.0f - py, down);
+        }
         if (!down) {
             s->mtt_seen[slot] = false;
         }
@@ -274,7 +298,8 @@ static const QemuInputHandler n94_mtt_handler = {
  * Cmd+Shift+H home, Cmd+L hold/power, Cmd+- and Cmd+= volume; Home, End, Page Down and
  * Page Up do the same without a modifier (the Windows key rarely reaches the SDL window),
  * so the monitor's sendkey works too. A key that pressed a button always releases it. Cmd+M
- * flips the ring/silent switch.
+ * flips the ring/silent switch; Cmd+Left and Cmd+Right (or Ctrl+) turn the device a quarter turn
+ * counterclockwise or clockwise (the accelerometer's orientation; the window turns with it).
  */
 static void n94_set_button(N94MachineState *s, int pin, bool down)
 {
@@ -313,8 +338,24 @@ static void n94_kbd_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
     case Q_KEY_CODE_SHIFT_R:
         s->kbd_shift = down;
         return;
+    case Q_KEY_CODE_CTRL:
+    case Q_KEY_CODE_CTRL_R:
+        s->kbd_ctrl = down;
+        return;
     default:
         break;
+    }
+    if (down && (s->kbd_cmd || s->kbd_ctrl) && (q == Q_KEY_CODE_LEFT || q == Q_KEY_CODE_RIGHT) && s->accel) {
+        /* UIDeviceOrientation, clockwise: portrait 1, landscape right 4, upside down 2, landscape left 3 */
+        static const uint32_t cw[] = { 1, 4, 2, 3 };
+        unsigned i = 0;
+
+        while (i < 4 && cw[i] != s->accel->orientation) {
+            i++;
+        }
+        i = i == 4 ? 0 : (i + (q == Q_KEY_CODE_RIGHT ? 1 : 3)) % 4;
+        lis302dl_apply_orientation(s->accel, cw[i]);
+        return;
     }
     if (q < 0 || q >= Q_KEY_CODE__MAX) {
         return;
@@ -354,6 +395,17 @@ static const QemuInputHandler n94_kbd_handler = {
     .mask  = INPUT_EVENT_MASK_KEY,
     .event = n94_kbd_event,
 };
+
+/* dart-nrt's translation for its clients, in the two orders their models take. */
+static hwaddr n94_dart_nrt_scaler_xlate(void *dart, uint32_t va, unsigned sid)
+{
+    return s5l8930_dart_dev_xlate(dart, sid, va);
+}
+
+static hwaddr n94_dart_nrt_jpeg_xlate(void *dart, unsigned sid, uint32_t va)
+{
+    return s5l8930_dart_dev_xlate(dart, sid, va);
+}
 
 /*
  * The panel's slow adaptive clocking block (mipi-dsim reg[1], 0x3F110000, sac-version 1; the
@@ -429,13 +481,49 @@ static const MemoryRegionOps n94_regfile_ops = {
     .valid.max_access_size = 4,
 };
 
+/*
+ * The DWI's three channels: control at +0x10, +0x20, +0x40, data at +0x14, +0x24 (and +0x30), +0x44.
+ * Channels 0 (synchronous) and 2 carry the backlight (the DT's backlight_update function on the dwi):
+ * AppleS5L8940XDWI sends the 11-bit level as 0x20000000 | (level & 3) << 9 | level >> 2, or as
+ * 0xa0000000 | level (10B329 0x80cca770). The panel shows it (s5l8930_display_set_backlight): 0x7a5
+ * at boot, 0x1f7 at the slider's low end with auto-brightness on.
+ */
+static void n94_dwi_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
+{
+    N94RegFile *r = opaque;
+    N94MachineState *s = N94_MACHINE(qdev_get_machine());
+    uint32_t w;
+
+    n94_regfile_write(opaque, addr, val, size);
+    if (addr != 0x10 && addr != 0x20 && addr != 0x40) {
+        return;
+    }
+    w = r->regs[(addr + 4) >> 2];
+    trace_n94_dwi(addr == 0x10 ? 0 : addr == 0x20 ? 1 : 2, val, w, addr == 0x20 ? r->regs[0x30 >> 2] : 0);
+    if (addr != 0x20 && val == 0x71 && (w >> 28 == 0x2 || w >> 28 == 0xa)) {
+        s->backlight_level = w >> 28 == 0xa ? w & 0x7ff : (w & 0x1ff) << 2 | ((w >> 9) & 3);
+        if (s->display) {
+            s5l8930_display_set_backlight(s->display, (s->backlight_level * 255 + 0x3ff) / 0x7ff);
+        }
+    }
+}
+
+static const MemoryRegionOps n94_dwi_ops = {
+    .read = n94_regfile_read,
+    .write = n94_dwi_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
 static N94RegFile *n94_regfile(N94MachineState *s, const char *name, hwaddr base, uint32_t size,
                                const uint32_t *done, unsigned ndone)
 {
     N94RegFile *r = g_malloc0(sizeof(*r) + size);
 
     memcpy(r->done_mask, done, MIN(ndone, ARRAY_SIZE(r->done_mask)) * sizeof(uint32_t));
-    memory_region_init_io(&r->mr, OBJECT(s), &n94_regfile_ops, r, name, size);
+    memory_region_init_io(&r->mr, OBJECT(s), strcmp(name, "n94.dwi") ? &n94_regfile_ops : &n94_dwi_ops, r,
+                          name, size);
     memory_region_add_subregion(get_system_memory(), base, &r->mr);
     return r;
 }
@@ -547,7 +635,7 @@ static void n94_init(MachineState *machine)
     N94MachineState *s = N94_MACHINE(machine);
     MemoryRegion *sysmem = get_system_memory();
     Object *cpuobj;
-    DeviceState *dev;
+    DeviceState *dev, *dart_nrt;
     SysBusDevice *sbd;
     int i;
 
@@ -764,11 +852,19 @@ static void n94_init(MachineState *machine)
             I2CSlave *slave = i2c_slave_new(slaves[i].type, slaves[i].addr);
 
             if (!strcmp(slaves[i].type, TYPE_LIS302DL)) {
+                s->accel = LIS302DL(slave);
+                object_property_add_child(OBJECT(machine), "accelerometer", OBJECT(slave));   /* orientation */
                 qdev_prop_set_uint8(DEVICE(slave), "whoami", 0x32);   /* LIS331DLH */
-                qdev_prop_set_string(DEVICE(slave), "mount", "-2,1,3");
+                /*
+                 * The mount is the transpose of the DT's orientation rows: the 4S's accelerometer
+                 * has {0xff, 0xff00, 0xff0000}, -1 on each axis, so every axis reads the device's
+                 * negated, and the gyro {0xff, 0xff00, 0x10000}. (Mounted as an iPad's, portrait
+                 * read as landscape and no app turned.)
+                 */
+                qdev_prop_set_string(DEVICE(slave), "mount", "-1,-2,-3");
             }
             if (!strcmp(slaves[i].type, TYPE_S5L8930_L3G4200D)) {
-                qdev_prop_set_string(DEVICE(slave), "mount", "1,2,3");
+                qdev_prop_set_string(DEVICE(slave), "mount", "-1,-2,3");
             }
             i2c_slave_realize_and_unref(slave, bus[slaves[i].bus], &error_fatal);
             if (!strcmp(slaves[i].type, TYPE_S5L8940_D1881)) {
@@ -842,10 +938,12 @@ static void n94_init(MachineState *machine)
         }
         dev = qdev_new(TYPE_S5L8930_DISPLAY);
         s->display = dev;
+        object_property_add_child(OBJECT(machine), "display", OBJECT(dev));  /* swaps, frame-timeline */
         qdev_prop_set_uint64(dev, "fb-base", fb_base);
         qdev_prop_set_uint16(dev, "width", fb_w);
         qdev_prop_set_uint16(dev, "height", fb_h);
         qdev_prop_set_uint8(dev, "generation", 4);      /* AppleH4PDisplayPipe's window layout and layer MMU */
+        qdev_prop_set_bit(dev, "rotate-with-device", true);
         sbd = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(sbd, &error_fatal);
         sysbus_mmio_map(sbd, 0, S5L8940_DISP_PIPE0_BASE);
@@ -875,8 +973,38 @@ static void n94_init(MachineState *machine)
         memory_region_add_subregion(sysmem, S5L8940_SAC_BASE, &s->sac);
 
         /* The two DARTs AppleS5L8930XDART programs at boot (jpeg/scaler, isp). */
-        sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_NRT_BASE, NULL);
+        dart_nrt = sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_NRT_BASE, NULL);
         sysbus_create_simple(TYPE_S5L8930_DART, S5L8940_DART_RT_BASE, NULL);
+
+        /*
+         * The CLCD's third window (clcd reg[2], 0x39300000, 0x1000): AppleH4PCLCD zeroes some thirty words of it
+         * and reads them back around the panel's power states. A register file.
+         */
+        n94_regfile(s, "n94.clcd-aux", S5L8940_CLCD_AUX_BASE, 0x1000, NULL, 0);
+
+        /*
+         * The i2s-switch (i2s-switch,s5l8940x; AppleAE2MCA): the routes between the I2S ports, the codec,
+         * Highland Park and the baseband, which the AP computes and writes (+0x00..+0x3c). A register file:
+         * the PCM itself goes from i2s0's FIFO to the host whatever the routes say.
+         */
+        n94_regfile(s, "n94.i2s-switch", S5L8940_I2S_SWITCH_BASE, 0x1000, NULL, 0);
+
+        /*
+         * The two M2 scalers (scaler,s5l8940x|s5l8720x; AppleM2ScalerCSCDriver) and the JPEG codec
+         * (jpeg,s5l8940x|s5l8920x), the A4 boards' models behind dart-nrt: mapper-jpeg streams 0-1,
+         * mapper-scaler 2-3. Unmodeled, the driver loaded the scalers' coefficient tables into nothing and
+         * AppleJPEGHal polled the codec's reset 10,000 times at every boot ("SW Reset failed").
+         * ponytail: the scalers' block version is the A4's (0x20007, ipad1.c); read +0x260 off a 4S.
+         */
+        for (i = 0; i < 2; i++) {
+            DeviceState *scaler = sysbus_create_simple("ipodtouch.scaler", S5L8940_SCALER_BASE(i),
+                                                       n94_irq(s, S5L8940_IRQ_SCALER(i)));
+
+            ipod_scaler_set_iommu(scaler, n94_dart_nrt_scaler_xlate, dart_nrt, 2 + i);
+            ipod_scaler_set_version(scaler, 0x20007);
+        }
+        dev = sysbus_create_simple("s5l8920.jpeg", S5L8940_JPEG_BASE, n94_irq(s, S5L8940_IRQ_JPEG));
+        s5l8920_jpeg_set_iommu(dev, n94_dart_nrt_jpeg_xlate, dart_nrt);
     }
 
     /*
@@ -1009,6 +1137,13 @@ static void n94_set_battery_level(Object *obj, Visitor *v, const char *name, voi
     n94_battery_update(s);
 }
 
+static void n94_get_backlight(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    int64_t value = N94_MACHINE(obj)->backlight_level;
+
+    visit_type_int(v, name, &value, errp);
+}
+
 static bool n94_get_ring_switch(Object *obj, Error **errp)
 {
     return N94_MACHINE(obj)->ring_silent;
@@ -1069,6 +1204,9 @@ static void n94_class_init(ObjectClass *klass, const void *data)
                               NULL, NULL);
     object_class_property_set_description(klass, "battery-level",
         "the gas gauge's state of charge, 0-100 (default 80); settable at run time over QMP qom-set");
+    object_class_property_add(klass, "backlight", "int", n94_get_backlight, NULL, NULL, NULL);
+    object_class_property_set_description(klass, "backlight",
+        "the panel backlight's level, 0-2047, as iOS last sent it over the DWI (0 until it has)");
     object_class_property_add_bool(klass, "ring-switch", n94_get_ring_switch, n94_set_ring_switch);
     object_class_property_set_description(klass, "ring-switch",
         "the ring/silent side switch at silent (default off: ring); settable at run time, Cmd+M flips it");

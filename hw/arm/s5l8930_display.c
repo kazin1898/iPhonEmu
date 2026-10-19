@@ -20,6 +20,7 @@
 #include "hw/arm/s5l8930.h"
 #include "hw/arm/frame-timeline.h"
 #include "hw/arm/panel-gamma.h"
+#include "hw/arm/ipod_touch_lcd.h"
 #include "exec/vaddr.h"
 #include "hw/arm/guest-services/gles.h"
 #include "system/runstate.h"
@@ -143,8 +144,11 @@ struct S5L8930DisplayState {
     uint32_t lut[CLCD_LUT_TABLES][256];
     uint32_t clcd_status;    /* CLCD_IRQ_STATUS */
     uint32_t calib[3][256];  /* the panel's calibration (panel_gamma) */
-    uint8_t gamma8[3][256];  /* tables 4-6 as the panel shows them, 8 bits in, 8 out */
+    uint8_t gamma8[3][256];  /* tables 4-6 as the panel shows them, 8 bits in, 8 out, then the backlight */
     bool gamma_identity;
+    uint8_t backlight;       /* 0-255: the board's backlight level (s5l8930_display_set_backlight) */
+    bool rotate;             /* "rotate-with-device": the console follows the device's orientation */
+    int rotation;            /* what the console shows, degrees clockwise (it_display_rotation) */
     uint32_t tvout[TVOUT_SIZE / 4];
     S5L8930Dart dart;        /* dart2 (hw/arm/s5l8930_dart.c) */
 
@@ -474,6 +478,14 @@ static void gamma_update(S5L8930DisplayState *s)
 {
     s->gamma_identity = panel_gamma(s->lut + CLCD_LUT_GAMMA, s->calib, s->clcd[0][CLCD_GAMMA_CTRL / 4] & 1,
                                     s->gamma8);
+    if (s->backlight != 255) {
+        for (int c = 0; c < 3; c++) {
+            for (int i = 0; i < 256; i++) {
+                s->gamma8[c][i] = (s->gamma8[c][i] * s->backlight + 127) / 255;
+            }
+        }
+        s->gamma_identity = false;
+    }
     s->shown = 0;           /* the panel redraws through the new tables */
 }
 
@@ -488,6 +500,16 @@ static void gamma_reset(S5L8930DisplayState *s)
     }
     panel_gamma_reset(s->calib);
     gamma_update(s);
+}
+
+void s5l8930_display_set_backlight(DeviceState *dev, uint8_t level)
+{
+    S5L8930DisplayState *s = S5L8930_DISPLAY(dev);
+
+    if (s->backlight != level) {
+        s->backlight = level;
+        gamma_update(s);
+    }
 }
 
 static uint64_t clcd_read(void *opaque, hwaddr addr, unsigned size)
@@ -1005,6 +1027,46 @@ static void gamma_row(const S5L8930DisplayState *s, const uint32_t *src, uint32_
     }
 }
 
+/*
+ * The panel's w x h picture into the console turned rot degrees clockwise (90, 180, 270), through the
+ * output gamma: every source row is a straight line in the console, a start and a signed step.
+ */
+static void rotated_copy(const S5L8930DisplayState *s, const uint32_t *img, unsigned w, unsigned h, int rot,
+                         DisplaySurface *surface)
+{
+    uint8_t *dst = surface_data(surface);
+    ptrdiff_t stride = surface_stride(surface);
+    g_autofree uint32_t *row = g_new(uint32_t, w);
+
+    for (unsigned y = 0; y < h; y++) {
+        const uint32_t *src = img + (size_t)y * w;
+        uint8_t *d;
+        ptrdiff_t step;
+
+        if (!s->gamma_identity) {
+            gamma_row(s, src, row, w);
+            src = row;
+        }
+        switch (rot) {
+        case 90:
+            d = dst + (size_t)(h - 1 - y) * 4;
+            step = stride;
+            break;
+        case 270:
+            d = dst + (size_t)(w - 1) * stride + (size_t)y * 4;
+            step = -stride;
+            break;
+        default:
+            d = dst + (size_t)(h - 1 - y) * stride + (size_t)(w - 1) * 4;
+            step = -4;
+            break;
+        }
+        for (unsigned x = 0; x < w; x++, d += step) {
+            *(uint32_t *)d = src[x];
+        }
+    }
+}
+
 /* ponytail: full redraw every host refresh (~30 Hz, 3 MiB), add dirty
  * tracking via framebuffer_update_display if it shows up in profiles. */
 static void display_update(void *opaque)
@@ -1016,11 +1078,25 @@ static void display_update(void *opaque)
     g_autofree uint32_t *live = NULL;
     const uint32_t *img;
     bool lit;
+    int rot;
+    unsigned cw, ch;
 
     panel_size(s, &w, &h);
+    /*
+     * iOS keeps the framebuffer in portrait and turns the UI inside it, so a console that follows the
+     * device's orientation (the accelerometer's, it_display_rotation) turns the picture back: a landscape
+     * app shows upright in a landscape window.
+     */
+    rot = s->rotate ? it_display_rotation() : 0;
+    if (rot != s->rotation) {
+        s->rotation = rot;
+        s->shown = 0;
+    }
+    cw = rot == 90 || rot == 270 ? h : w;
+    ch = rot == 90 || rot == 270 ? w : h;
     surface = qemu_console_surface(s->con);
-    if (surface_width(surface) != w || surface_height(surface) != h) {
-        qemu_console_resize(s->con, w, h);
+    if (surface_width(surface) != cw || surface_height(surface) != ch) {
+        qemu_console_resize(s->con, cw, ch);
         surface = qemu_console_surface(s->con);
         s->shown = 0;
     }
@@ -1054,18 +1130,22 @@ static void display_update(void *opaque)
         s->shown = 0;   /* live layers: drawn every refresh, as they may change without a swap */
     }
     s->shown_surface = surface;
-    for (unsigned y = 0; y < h; y++) {
-        uint8_t *d = surface_data(surface) + y * surface_stride(surface);
+    if (img && rot) {
+        rotated_copy(s, img, w, h, rot, surface);
+    } else {
+        for (unsigned y = 0; y < ch; y++) {
+            uint8_t *d = surface_data(surface) + y * surface_stride(surface);
 
-        if (!img) {
-            memset(d, 0, w * 4);
-        } else if (s->gamma_identity) {
-            memcpy(d, img + (size_t)y * w, w * 4);
-        } else {
-            gamma_row(s, img + (size_t)y * w, (uint32_t *)d, w);
+            if (!img) {
+                memset(d, 0, cw * 4);
+            } else if (s->gamma_identity) {
+                memcpy(d, img + (size_t)y * w, w * 4);
+            } else {
+                gamma_row(s, img + (size_t)y * w, (uint32_t *)d, w);
+            }
         }
     }
-    dpy_gfx_update(s->con, 0, 0, w, h);
+    dpy_gfx_update(s->con, 0, 0, cw, ch);
 }
 
 static const GraphicHwOps display_gfx_ops = {
@@ -1088,6 +1168,7 @@ static void s5l8930_display_reset(DeviceState *dev)
     memset(s->clcd, 0, sizeof(s->clcd));
     memset(s->lut, 0, sizeof(s->lut));
     s->clcd_status = 0;
+    s->backlight = 255;
     gamma_reset(s);
     memset(s->tvout, 0, sizeof(s->tvout));
     memset(&s->dart, 0, sizeof(s->dart));
@@ -1316,6 +1397,8 @@ static const Property s5l8930_display_properties[] = {
     /* The pipe's generation: 3 = the A4's (AppleDisplayPipe), 4 = the A5's (AppleH4PDisplayPipe: the UI
      * window at 0x50/0x60/0x70 and a layer MMU, DP_H4P_*). */
     DEFINE_PROP_UINT8("generation", S5L8930DisplayState, gen, PIPE_GEN_H3),
+    /* The console turns with the device (the accelerometer's orientation, it_display_rotation). */
+    DEFINE_PROP_BOOL("rotate-with-device", S5L8930DisplayState, rotate, false),
 };
 
 static void s5l8930_display_class_init(ObjectClass *klass, const void *data)

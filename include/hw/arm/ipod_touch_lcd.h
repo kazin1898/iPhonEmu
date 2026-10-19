@@ -162,6 +162,8 @@ void lcd_changebrightness(int brightness);
  * left, 4 landscape right); anything else leaves the window in portrait.
  */
 void it_display_set_orientation(uint32_t orientation);
+/* The rotation it_display_set_orientation asked for, in degrees clockwise (0, 90, 180, 270). */
+int it_display_rotation(void);
 
 /* The S5L8920's CLCD scans out through its DART (dart0): window 1 holds an IOVA. */
 void ipod_lcd_set_iommu(DeviceState *lcd, hwaddr (*xlate)(void *opaque, uint32_t va, unsigned sid),
