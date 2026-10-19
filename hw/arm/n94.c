@@ -71,7 +71,7 @@ struct N94MachineState {
     uint32_t sac_regs[0x40];
     struct N94RegFile *dwi, *pl310_cif, *armio[2];
     Chardev *gauge;                      /* the bq27540 on uart5's HDQ line (s5l8930_hdq.c) */
-    Object *pmu;                         /* the D1881 (its vbat-mv follows battery-level) */
+    Object *pmu;                         /* the D1881 (its vbat-mv follows battery-level; its button events) */
     int battery_level;                   /* %, battery-level property */
     IPodTouchMultitouchState *mt;        /* the digitizer on spi1 */
     bool kbd_cmd, kbd_shift;
@@ -277,6 +277,10 @@ static const QemuInputHandler n94_mtt_handler = {
 static void n94_set_button(N94MachineState *s, int pin, bool down)
 {
     qemu_set_irq(qdev_get_gpio_in(s->gpio, pin), !down);
+    /* the PMU sees Home and power too: its wake events (s5l8940_d1881.c) */
+    if (s->pmu && (pin == S5L8940_GPIO_BTN_MENU || pin == S5L8940_GPIO_BTN_HOLD)) {
+        qemu_set_irq(qdev_get_gpio_in_named(DEVICE(s->pmu), "button", pin == S5L8940_GPIO_BTN_HOLD), down);
+    }
 }
 
 static void n94_kbd_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)

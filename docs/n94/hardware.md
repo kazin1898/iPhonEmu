@@ -658,6 +658,14 @@ does to start cpu1, as traced and decoded:
   timebase two cores took 90 s. Both vCPU threads are busy for the first minute and nearly idle (`wfi`)
   after. Still on the table for speed: the kernel's `TLBIMVAIS` loops (0x80087350), each a cross-vCPU
   flush in QEMU (exclusive work per page).
+- **The lock screen** (`gl6` past Setup, `device boot`): reached 54-55 s after the command with two cores,
+  78 s with one. Ten minutes there with two cores, the panel woken by Home every minute: 10 of 10 wakes,
+  SpringBoard, backboardd and mediaserverd alive, no panic, `hw.ncpu 2` at the end. Not SMP's: with one
+  core as with two, mediaserverd is sometimes killed by CoreMedia's 9 s RPC timeout ("fig rpc timeout --
+  playerremote_CopyProperty [ CallIsActive ]", read from the unit's own report through `dump-writes`), more
+  often once system sounds play (unlock, clicks); launchd does not bring it back and SpringBoard then hangs
+  in `AudioServicesPlaySystemSound`, so the panel no longer wakes. The audio path (the AE2's audio rings)
+  is the place to fix it; open.
 - **Checked**: `tools/dev/xnu_sysctl.py` reads the guest's hw counts over the gdbstub (`hw.ncpu: 2`,
   `hw.activecpu: 2`, `hw.physicalcpu: 2`, `hw.logicalcpu_max: 2`); the kernel has no `machine_info`
   symbol, so the tool takes its address from `host_info`'s literal pool (0x802d01a8 in 10B329).
@@ -765,9 +773,18 @@ starts it and wires the link by default (`--no-usb` for neither). What it took:
   guest (nothing re-reads vbat; the gauge is only asked its firmware version). Setup's status bar draws
   the charging battery full whatever the level (the lock screen and home screen draw it; not seen here,
   the test units being at Setup).
-- **Wake by button.** The DT's `wake_button_menu`/`wake_button_hold` are the PMU's `'STAT'` 0x180/0x181,
-  read when the AP wakes from sleep; on a USB host's cable iOS keeps the AP awake, so this path is not
-  exercised here and the model has no STAT bits for the buttons.
+- **Buttons and wake events.** The DT's `wake_button_menu`/`wake_button_hold` are the PMU function
+  `'STAT'` 0x180/0x181. AppleD1881PMU's handler for it (0x80aee18c) reads, for an argument with bit 7, the
+  event registers latched at the last PMU interrupt (register `(arg & 0x3f) >> 3`, bit `arg & 7`), else
+  STATUS_A + that register, inverted by the function's second byte: Home and power are EVENT_A bits 0 and
+  1 (dock `acc_detect`, `'STAT'` 5, is STATUS_A bit 5). The PMU model latches them when the machine's Home
+  and power keys go down (gpio-in `button`, wired beside the GPIO pins). Awake the kernel keeps them
+  masked (IRQ_MASK_A ends at 0xc7) and reads them with the other events: `-trace s5l8940_d1881_read` shows
+  EVENT_A 0x01 after a Home press and 0x02 after power. They tell a wake's reason; the AP's sleep itself is
+  not exercised on a USB host's cable (iOS keeps the AP awake there).
+- **Checked on the lock screen** (`gl6` walked through Setup, two cores): the status bar shows 84 % and the
+  charging glyph, the lock screen the charging battery; Ajustes > Geral > Uso > Nível da Bateria shows the
+  percentage.
 
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 

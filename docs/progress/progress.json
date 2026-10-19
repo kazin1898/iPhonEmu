@@ -44,7 +44,7 @@
           "name": "Cortex-A9 core, TCG",
           "percent": 100,
           "weight": 4,
-          "note": "both cores (-smp 2, MTTCG; device boot's default): enable_core is the PMGR's 'Core' (0x1214/0x1220), cpu1 starts at its reset vector; hw.ncpu = 2 read from the kernel; Setup at 59 s on two cores against 88 s on one; 13 min stable"
+          "note": "both cores (-smp 2, MTTCG; device boot's default): enable_core is the PMGR's 'Core' (0x1214/0x1220), cpu1 starts at its reset vector; hw.ncpu = 2 read from the kernel; lock screen at 55 s on two cores against 78 s on one; 10 min there with no panic"
         },
         {
           "name": "Apple AIC and timers",
@@ -60,9 +60,9 @@
         },
         {
           "name": "PMU D1881, I2C, sensors",
-          "percent": 95,
+          "percent": 100,
           "weight": 3,
-          "note": "ADC muxes identified; accelerometer and gyro start (nominal calibration in the kboot DT); bq27540 gauge on uart5; the level iOS reports (lockdown: 53% at battery-level 50, charging) follows vbat through the kext's own battery curve; open: wake-by-button STAT bits (sleep is not exercised on a USB host)"
+          "note": "ADC muxes identified; accelerometer and gyro start (nominal calibration in the kboot DT); bq27540 gauge on uart5; the level follows vbat through the kext's battery curve (84% and charging on the lock screen's status bar, lockdown alike); Home/power latch the PMU's EVENT_A wake bits ('STAT' 0x180/0x181)"
         },
         {
           "name": "DMA (CDMA) and crypto (AES, SHA, PKE)",

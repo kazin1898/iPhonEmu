@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 67.1% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 67.3% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -81,7 +81,7 @@
 <rect x="548" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="569" y="251" width="18" height="16" rx="3" fill="#3fb950"/>
 <text x="598" y="264" fill="#e6edf3" font-weight="600">100%</text>
-<text x="642" y="264" fill="#8b949e" font-size="12">both cores (-smp 2, MTTCG; device boot&#x27;s default): enable_core is the PMGR&#x27;s &#x27;Core&#x27; (0x1214/0x1220), cpu1 starts at its reset vector; hw.ncpu = 2 read from the kernel; Setup at 59 s on two cores against 88 s on one; 13 min stable</text>
+<text x="642" y="264" fill="#8b949e" font-size="12">both cores (-smp 2, MTTCG; device boot&#x27;s default): enable_core is the PMGR&#x27;s &#x27;Core&#x27; (0x1214/0x1220), cpu1 starts at its reset vector; hw.ncpu = 2 read from the kernel; lock screen at 55 s on two cores against 78 s on one; 10 min there with no panic</text>
 <text x="36" y="290" fill="#e6edf3">Apple AIC and timers</text>
 <rect x="380" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="277" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -118,9 +118,9 @@
 <rect x="506" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="527" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="548" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="569" y="329" width="18" height="16" rx="3" fill="#7bd389"/>
-<text x="598" y="342" fill="#e6edf3" font-weight="600">95%</text>
-<text x="642" y="342" fill="#8b949e" font-size="12">ADC muxes identified; accelerometer and gyro start (nominal calibration in the kboot DT); bq27540 gauge on uart5; the level iOS reports (lockdown: 53% at battery-level 50, charging) follows vbat through the kext&#x27;s own battery curve; open: wake-by-button STAT bits (sleep is not exercised on a USB host)</text>
+<rect x="569" y="329" width="18" height="16" rx="3" fill="#3fb950"/>
+<text x="598" y="342" fill="#e6edf3" font-weight="600">100%</text>
+<text x="642" y="342" fill="#8b949e" font-size="12">ADC muxes identified; accelerometer and gyro start (nominal calibration in the kboot DT); bq27540 gauge on uart5; the level follows vbat through the kext&#x27;s battery curve (84% and charging on the lock screen&#x27;s status bar, lockdown alike); Home/power latch the PMU&#x27;s EVENT_A wake bits (&#x27;STAT&#x27; 0x180/0x181)</text>
 <text x="36" y="368" fill="#e6edf3">DMA (CDMA) and crypto (AES, SHA, PKE)</text>
 <rect x="380" y="355" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="355" width="18" height="16" rx="3" fill="#3fb950"/>

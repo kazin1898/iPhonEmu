@@ -25,6 +25,14 @@
  *              iBoot here, so a restart that follows that write powers the
  *              machine off as well.
  *
+ * The buttons: the part sees the menu (Home) and hold (power) buttons too, and a press sets EVENT_A
+ * bit 0 or 1 (gpio-in "button" 0 and 1, wired by the machine next to the GPIO pins). Awake, the
+ * kernel keeps both masked (IRQ_MASK_A ends at 0xc7) and only reads them with the other events; they
+ * are the wake reason the DT's wake_button_menu / wake_button_hold report: the PMU function 'STAT'
+ * 0x180 / 0x181 (AppleD1881PMU 0x80aee18c: argument bit 7 = the events latched at the last interrupt,
+ * register (arg & 0x3f) >> 3, bit arg & 7, else STATUS_A + that register; dock acc_detect is 'STAT' 5,
+ * STATUS_A bit 5).
+ *
  * The interrupt line is the DT's GPIO 0x0d (active low); the model's
  * gpio-out 0 is 1 while an unmasked event is pending. Everything else holds
  * what was written and reads it back; -trace s5l8940_d1881* shows what the
@@ -47,6 +55,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8940D1881State, S5L8940_D1881)
 #define D1881_IRQ_MASK_A    0x0e
 #define D1881_EVENT_B_ADC   0x20
 #define D1881_EVENT_A_VBUS  0x08        /* PMU interrupt 3: the power source re-reads the status */
+#define D1881_EVENT_A_MENU  0x01        /* the Home button pressed ('STAT' 0x180) */
+#define D1881_EVENT_A_HOLD  0x02        /* the power button pressed ('STAT' 0x181) */
 #define D1881_EVENT_A_USB   0x40
 #define D1881_STATUS_A      0x08        /* STATUS_A..F, read 6 at once */
 #define D1881_STATUS_A_VBUS     0x08
@@ -212,11 +222,22 @@ static void d1881_reset(DeviceState *dev)
     qemu_irq_lower(s->irq);
 }
 
+static void d1881_button(void *opaque, int n, int level)
+{
+    S5L8940D1881State *s = opaque;
+
+    if (level) {
+        s->regs[D1881_EVENT_A] |= n ? D1881_EVENT_A_HOLD : D1881_EVENT_A_MENU;
+        d1881_update_irq(s);
+    }
+}
+
 static void d1881_init(Object *obj)
 {
     S5L8940D1881State *s = S5L8940_D1881(obj);
 
     qdev_init_gpio_out(DEVICE(obj), &s->irq, 1);
+    qdev_init_gpio_in_named(DEVICE(obj), d1881_button, "button", 2);
     s->vbat_mv = 4037;
     object_property_add_uint32_ptr(obj, "vbat-mv", &s->vbat_mv, OBJ_PROP_FLAG_READWRITE);
 }
