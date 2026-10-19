@@ -101,9 +101,9 @@
         },
         {
           "name": "Audio (I2S, CS42L63, AE2)",
-          "percent": 35,
+          "percent": 45,
           "weight": 2,
-          "note": "AE2 coprocessor modeled high-level, I2S blocks, codec and Highland Park start, mediaserverd up; no PCM to the host yet, AE2 audio endpoints unread"
+          "note": "AE2 coprocessor modeled high-level, its sleep/restart cycles answered (the ring index kept across restarts: mediaserverd no longer hangs and gets killed after system sounds), I2S blocks, codec and Highland Park start; no PCM to the host yet, AE2 audio endpoints unread"
         }
       ]
     },

@@ -174,9 +174,40 @@ static hwaddr ae2_config(S5L8940AE2State *s)
     return s->fw_config;
 }
 
+static bool ae2_slot_pending(hwaddr slot)
+{
+    uint32_t w0 = ae2_ldl(slot);
+
+    return (w0 & 1) != RING_OWNER_AP && RING_ITEM(w0) != 0;
+}
+
+/*
+ * The entries pending start where the kext's own index is. That index lives on across a restart of
+ * the core: the audio stack puts the AE2 to sleep ('slep', then control +4 <- 0) whenever audio goes
+ * idle and starts it again for the next sound, and EmbeddedIOP keeps posting from the slot after its
+ * last message. Reset to slot 0 at each start, the model looked at an entry already answered once the
+ * last message before a sleep had not ended on slot 0 (the control ring has two entries: nop, nop, slep
+ * leave the next on slot 1), answered nothing, and the 'nop' of the restart never came back: the audio
+ * engine waited on it, mediaserverd stopped answering, and CoreMedia's 9 s RPC timeout had it killed.
+ * So the index is kept, and if its slot is not pending the ring is searched for the one that is.
+ */
 static int ae2_walk_ring(S5L8940AE2State *s, int h, hwaddr ring, uint32_t n)
 {
     int served = 0;
+
+    if (s->ring_rx[h] >= n) {
+        s->ring_rx[h] = 0;
+    }
+    if (!ae2_slot_pending(ring + s->ring_rx[h] * RING_ENTRY_SIZE)) {
+        for (uint32_t i = 1; i < n; i++) {
+            uint32_t k = (s->ring_rx[h] + i) % n;
+
+            if (ae2_slot_pending(ring + k * RING_ENTRY_SIZE)) {
+                s->ring_rx[h] = k;
+                break;
+            }
+        }
+    }
 
     for (uint32_t i = 0; i < n; i++) {
         hwaddr slot = ring + s->ring_rx[h] * RING_ENTRY_SIZE;
@@ -249,7 +280,6 @@ static void ae2_run(S5L8940AE2State *s)
     s->fw_base = s->ctrl[CTRL_FW_BASE / 4];
     s->fw_config = 0;
     s->said_outside = false;
-    memset(s->ring_rx, 0, sizeof(s->ring_rx));
     if (s->fw_base < S5L8940_DRAM_BASE || s->fw_base >= S5L8940_DRAM_BASE + S5L8940_DRAM_SIZE) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: firmware base 0x%08x outside DRAM\n", __func__, s->fw_base);
         return;

@@ -664,11 +664,9 @@ does to start cpu1, as traced and decoded:
   and Ajustes' first launch after boot, tap to a still screen, 1.10 / 1.05 / 1.08 s against 2.23 / 1.74 /
   1.63 s (1.08 against 1.87 s, 1.73x). Ten minutes there with two cores, the panel woken by Home every minute: 10 of 10 wakes,
   SpringBoard, backboardd and mediaserverd alive, no panic, `hw.ncpu 2` at the end. Not SMP's: with one
-  core as with two, mediaserverd is sometimes killed by CoreMedia's 9 s RPC timeout ("fig rpc timeout --
-  playerremote_CopyProperty [ CallIsActive ]", read from the unit's own report through `dump-writes`), more
-  often once system sounds play (unlock, clicks); launchd does not bring it back and SpringBoard then hangs
-  in `AudioServicesPlaySystemSound`, so the panel no longer wakes. The audio path (the AE2's audio rings)
-  is the place to fix it; open.
+  core as with two, mediaserverd was sometimes killed by CoreMedia's 9 s RPC timeout after system sounds,
+  and the panel then stopped waking: the AE2 model's ring index across the coprocessor's restarts, fixed
+  ("The AE2", "Sleep and restart").
 - **Checked**: `tools/dev/xnu_sysctl.py` reads the guest's hw counts over the gdbstub (`hw.ncpu: 2`,
   `hw.activecpu: 2`, `hw.physicalcpu: 2`, `hw.logicalcpu_max: 2`); the kernel has no `machine_info`
   symbol, so the tool takes its address from `host_info`'s literal pool (0x802d01a8 in 10B329).
@@ -857,6 +855,23 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
   the IOP's, every other endpoint's message traced (`-trace 's5l8940_ae2*'`, `ep%d item ...: 8 words`) and
   handed back. That is enough for AppleAE2Audio's MCA (the I2S switch at 0x3FA01000, routes computed by the
   AP and written there; still an unimplemented window), AppleCS42L63Audio and Highland Park to start.
+- **Sleep and restart** (2026-10-19). The audio stack puts the AE2 to sleep whenever audio goes idle
+  ('slep' on the control ring, then control `+4` <- 0) and starts it again (the whole startCPU sequence)
+  for the next sound: in a quarter of an hour of unlocking, opening Ajustes and locking, 33 starts and 85
+  doorbells. EmbeddedIOP keeps its ring index across the restart and posts the start's 'nop' on the slot
+  after its last message. The model reset its own index to slot 0 at each start, so once the last message
+  before a sleep had not ended on slot 0 (the control ring has two entries: nop, nop, slep leave the next
+  on slot 1) the doorbell found only an entry it had answered, answered nothing, and that 'nop' never came
+  back. The audio engine waited on it and mediaserverd stopped answering; CoreMedia's 9 s RPC timeout then
+  had it killed ("fig rpc timeout -- playerremote_CopyProperty [ CallIsActive ]", the unit's own report
+  through `dump-writes`), launchd did not bring it back (its exit presumably stuck on the same engine), and
+  SpringBoard hung in `AudioServicesPlaySystemSound`, so the panel stopped waking: within minutes of
+  unlock / Ajustes / lock cycles, on one core as on two, and sometimes right after a boot. The model now
+  keeps the index (reset only with the device) and, when its slot is not pending, takes the ring's pending
+  slot. Checked with `runs/n94/usb/heavy.sh` (that cycle every minute) on `gl6`: 16 of 16 on two cores and
+  8 of 8 on one, the panel waking each time and mediaserverd the same process throughout; every doorbell
+  answered (`-trace 's5l8940_ae2*'`). The audio rings 2-7 still carry nothing: system sounds do not go
+  through them.
 - **I2S**: AppleSamsungI2S (i2s-version 3) stops a port by writing `+0x00` <- 0x34 and spinning with
   `IODelay(10)` until bit 1 (drained) is set: on the unimplemented window that pinned the CPU from the
   codec's start on. The four ports are now the A4's `s5l8930_i2s.c` at 0x34190000 + n * 0x1000.

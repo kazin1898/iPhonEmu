@@ -13,7 +13,7 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-67.3%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
+![overall](https://img.shields.io/badge/overall-67.6%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
@@ -36,7 +36,7 @@ goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_ma
 | Video and input: Display pipe + CLCD + MIPI-DSI, 640x960 panel | 🟩🟩🟩🟩🟩🟩🟩🟩🟨⬜ | 85% |
 | Video and input: GPU: GL bridge on Windows (ANGLE) | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |
 | Video and input: Multitouch (SPI) and buttons | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
-| Video and input: Audio (I2S, CS42L63, AE2) | 🟩🟩🟩🟨⬜⬜⬜⬜⬜⬜ | 35% |
+| Video and input: Audio (I2S, CS42L63, AE2) | 🟩🟩🟩🟩🟨⬜⬜⬜⬜⬜ | 45% |
 | Radios (stubs): Wi-Fi over HSIC, Bluetooth, baseband | 🟩⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 10% |
 | Product: Speed: 1:1 with a real 4S on PC | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
 | Product: iPhonEmu.exe (open IPSW, prepare, boot) | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ | 0% |
