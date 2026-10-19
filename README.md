@@ -13,7 +13,7 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-55.4%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-18-lightgrey)
+![overall](https://img.shields.io/badge/overall-55.6%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-18-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
@@ -23,7 +23,7 @@ goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_ma
 | Area | Progress | |
 |---|---|---|
 | System: Toolchain and Windows build | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
-| System: Firmware preparation (ios-prep) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
+| System: Firmware preparation (ios-prep) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |
 | System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩🟩🟩🟩⬜ | 92% |
 | System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟨 | 95% |

@@ -11,7 +11,9 @@ at 0x80001000, so with no KASLR slide the kernel's VA == PA; timebase 24 MHz; bo
 0x8940; a 640x960 Retina panel at scale 2.
 """
 import hashlib
+import lzss
 import struct
+import zlib
 import nand_ppn
 
 from devicetree import DeviceTree, le
@@ -328,6 +330,40 @@ def bundle(image, load_pa, entry_pa, bootargs_pa, segments=()):
             out += data
     out += b"K48KBOOT" + le([load_pa, entry_pa, bootargs_pa, len(image)])
     return bytes(out)
+
+
+def iboot_image(blob):
+    """(width, height, rows of 8-bit grey over black) of an iBootIm image (the IPSW's AppleLogo once its
+    IMG3 is decrypted): "iBootIm\\0", Adler-32 of everything from +12, compression 'lzss', format 'grey',
+    u16 width and height, the LZSS stream at +0x40. A 'grey' pixel is two bytes, the level and 255 minus
+    its coverage; iBoot composites it over the black panel."""
+    if len(blob) < 0x40 or blob[:8] != b"iBootIm\0":
+        raise ValueError("not an iBootIm image")
+    adler, comp, fmt, width, height = struct.unpack_from("<I4s4sHH", blob, 8)
+    if zlib.adler32(blob[12:]) != adler:
+        raise ValueError("iBootIm image fails its Adler-32")
+    if comp[::-1] != b"lzss" or fmt[::-1] != b"grey":
+        raise ValueError(f"iBootIm image is {comp[::-1]!r}/{fmt[::-1]!r}, only lzss/grey is known")
+    px = lzss.decompress(blob[0x40:], width * height * 2)
+    if len(px) != width * height * 2:
+        raise ValueError("iBootIm image is short")
+    return width, height, [bytes(px[(y * width + x) * 2] * (255 - px[(y * width + x) * 2 + 1]) // 255
+                                 for x in range(width)) for y in range(height)]
+
+
+def logo_segment(board, blob):
+    """The boot logo as iBoot leaves it on the panel: the image centered on the black framebuffer at
+    board.vram_pa (BGRA, the rows the logo spans), as a K48SEG segment (pa, length, data)."""
+    width, height, rows = iboot_image(blob)
+    if width > board.fb_width or height > board.fb_height:
+        raise ValueError(f"boot logo {width}x{height} is larger than the {board.fb_width}x{board.fb_height} panel")
+    stride = board.fb_width * FB_DEPTH // 8
+    x0, y0 = (board.fb_width - width) // 2, (board.fb_height - height) // 2
+    band = bytearray(b"\0\0\0\xff" * board.fb_width * height)
+    for y, row in enumerate(rows):
+        at = y * stride + x0 * 4
+        band[at:at + width * 4] = b"".join(bytes((v, v, v, 0xff)) for v in row)
+    return board.vram_pa + y0 * stride, len(band), bytes(band)
 
 
 def parse_bundle(blob):

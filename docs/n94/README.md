@@ -48,6 +48,15 @@ without `--nand ppn`, since with the NVRAM on the NAND the kernel must read it f
 - `--cpus 1` (default for bring-up): `cpus/cpu1` is unmatched (`device_type off`, name `xcpu`).
 - `--nand raw` (default): the A4 raw-NAND geometry and `ppn-device 0`; `--nand ppn` keeps PPN.
 - `--hide NODE` unmatches any further node; `--verbose-boot` appends `-v`.
+- **The boot logo.** `AppleLogo.bin` (an `iBootIm` image: Adler-32 from +12, LZSS, format `grey`, 132x164 for
+  this panel, two bytes a pixel, the level and 255 minus its coverage) is decoded and composited over black,
+  centered on the 640x960 framebuffer at 0x9f700000 as iBoot leaves it, and carried as a `K48SEG` segment of
+  the bundle (the 164 rows it spans, 420 KB). `n94.c` writes the segments at reset, so the panel shows the
+  apple from the first scanout until backboardd's first frame replaces it (`kboot.json` records `boot_logo`;
+  `--no-boot-logo` leaves the panel black). Every bundle gets it: `prepare`, `kboot`, the install boot and
+  `device create`; `device boot` rebuilds a device's bundle made before this (same geometry and identity).
+  Checked on `gl5`: a screendump 2 s after QEMU's start shows the apple
+  (`runs/n94/progress/2026-10-18_FW_logo-de-boot-2s.png`), which stays until the lock screen.
 - `--ramdisk restore|update` (with `--ipsw` once, to decrypt it) stages the IPSW's ramdisk after boot_args,
   under topOfKernelData, publishes it as `chosen/memory-map/RAMDisk` and adds `rd=md0`: the kernel's md
   driver makes it the root, as iBoot does for a restore. That is how M2 was reached without a NAND model.

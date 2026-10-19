@@ -13,9 +13,9 @@
         },
         {
           "name": "Firmware preparation (ios-prep)",
-          "percent": 95,
+          "percent": 100,
           "weight": 3,
-          "note": "IPSW to kboot, rootfs, PPN NAND store, the install boot's two helpers (static and dyld-linked) and ramdisk; boot logo pending"
+          "note": "IPSW to kboot, rootfs, PPN NAND store, the install boot's two helpers (static and dyld-linked) and ramdisk; the IPSW's AppleLogo decoded and on the panel from reset (K48SEG), as iBoot leaves it"
         },
         {
           "name": "Boot to launchd (userland)",

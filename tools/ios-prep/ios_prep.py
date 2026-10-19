@@ -163,7 +163,16 @@ def build_kboot(out_dir, args, ip=None):
     image, load_pa, entry, ba_pa, info = kboot.build(kernel, dtb, ident, boot_args=boot_args, iboot=iboot,
                                                       cpus=args.cpus, nand=args.nand, hide=args.hide or (),
                                                       ramdisk=ramdisk_image(out_dir, args, ip))
-    blob = kboot.bundle(image, load_pa, entry, ba_pa)
+    segments = []
+    logo_path = os.path.join(out_dir, "AppleLogo.bin")
+    if os.path.exists(logo_path) and not getattr(args, "no_boot_logo", False):
+        # the panel shows the logo from reset, as iBoot leaves it, until backboardd's first frame
+        try:
+            segments.append(kboot.logo_segment(board, read(logo_path)))
+            info["boot_logo"] = {"pa": segments[0][0], "bytes": segments[0][1]}
+        except ValueError as e:
+            log(f"boot logo: {e}; the panel stays black until backboardd draws")
+    blob = kboot.bundle(image, load_pa, entry, ba_pa, segments)
     out = getattr(args, "bundle", None) or os.path.join(out_dir, "kboot.bin")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "wb") as f:
@@ -511,6 +520,18 @@ def cmd_device_refresh(args):
     install_device(dev, meta["firmware"], meta, args)
 
 
+def boot_logo_current(bundle, fw):
+    """False when fw has a boot logo and bundle's .json does not record one (a bundle made before
+    build_kboot drew it)."""
+    if not os.path.exists(os.path.join(fw, "AppleLogo.bin")):
+        return True
+    try:
+        with open(os.path.splitext(bundle)[0] + ".json") as f:
+            return "boot_logo" in json.load(f)
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_device_boot(args):
     import device
     dev = device.Device(args.root, args.name)
@@ -518,6 +539,9 @@ def cmd_device_boot(args):
     if meta.get("state") != "ready":
         raise SystemExit(f"device {args.name!r} is {meta.get('state')}, not ready: device refresh {args.name} "
                          "re-runs its install boot")
+    if not boot_logo_current(dev.kboot, meta["firmware"]):
+        log("kboot.bin predates the boot logo: building it again (same geometry and identity)")
+        device_kboot(dev, meta["firmware"], meta, install=False)
     extra = args.qemu_args
     log(f"booting {args.name!r} ({meta['product']} {meta['version']} {meta['build']}, {meta['storage_gib']} GiB); "
         f"serial log {os.path.join(dev.logs, 'serial.log')}"
@@ -619,6 +643,8 @@ def add_kboot_opts(p):
     p.add_argument("--bundle", metavar="FILE", help="write the bundle here instead of DIR/kboot.bin (and its .json)")
     p.add_argument("--seed", default=DEFAULT_SEED, help="identity seed (serial, ECID, MACs)")
     p.add_argument("--docs", help="also copy devicetree.txt/kexts.txt/iomap.tsv into this directory")
+    p.add_argument("--no-boot-logo", action="store_true",
+                   help="leave the panel black at reset (by default DIR/AppleLogo.bin is drawn on it, as iBoot does)")
 
 
 def main():

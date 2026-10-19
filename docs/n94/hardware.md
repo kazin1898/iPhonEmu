@@ -498,7 +498,7 @@ model's own dart2 window stays unmapped. What the 10B329 drivers expect, and wha
   base for an unset layer and kept the panel dark. The model now shows any MMU-on layer whatever its base.
 - **What backboardd draws.** Three swaps on pipe0 in the first 90 s of a normal boot (IDs 9, 17, 25; the
   RGBOUT pipe gets a pair per `AppleRGBOUT` power cycle). 9 and 17 show UI0 alone, iBoot's framebuffer
-  (black: kboot draws no logo). 25 turns on both layers (`0x1038` = 0x300), UI0 and UI1 each through its
+  (black when this was traced; the bundle now carries the IPSW's boot logo, README "Preparing the firmware"). 25 turns on both layers (`0x1038` = 0x300), UI0 and UI1 each through its
   own MMU (page tables at 0x81cbc000 and 0x81d1e000 in one run), both BGRA 640x960 at stride 2560, blended
   UI1 over UI0: backboardd's software CoreAnimation (`CA_ENABLE_OGL=0`) shows the Apple logo with an empty
   progress bar, its boot overlay, and keeps it until the system app's first frame
