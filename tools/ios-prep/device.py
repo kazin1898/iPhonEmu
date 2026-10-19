@@ -298,6 +298,17 @@ def run_install_boot(dev, limit, log=print, poll=2.0):
     return result, time.time() - t0
 
 
+def display_option(display):
+    """QEMU's -display for a unit's window. The machine's touch panel is an absolute pointer, and QEMU's
+    SDL and GTK windows hide the host's cursor over an absolute pointer that has no guest cursor of its own
+    (iOS draws none), so nothing showed where a click would land: show-cursor=on keeps the host's cursor.
+    An explicit show-cursor in `display`, and the window-less displays, are left as given."""
+    kind = display.split(",", 1)[0]
+    if kind in ("sdl", "gtk") and "show-cursor=" not in display:
+        return display + ",show-cursor=on"
+    return display
+
+
 def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=True):
     """The normal boot: dev's kboot.bin on dev's store, QMP on qmp and qmp + 1 (tools/dev/n94_input.py),
     and with usb the USB link to a usbmux bridge (start_usb_bridge), so the host's libimobiledevice
@@ -308,7 +319,7 @@ def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=
     if usb:
         start_usb_bridge(dev)
     cmd = [qemu_exe()] + machine(dev.kboot, dev.nand, USB_LINK if usb else None) + [
-        "-serial", serial, "-display", display, "-monitor", "none"]
+        "-serial", serial, "-display", display_option(display), "-monitor", "none"]
     if qmp:
         for port in (qmp, qmp + 1):
             cmd += ["-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"]
