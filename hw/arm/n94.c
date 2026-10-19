@@ -43,6 +43,7 @@
 #include "system/system.h"
 #include "target/arm/cpu.h"
 #include "target/arm/cpregs.h"
+#include "target/arm/arm-powerctl.h"
 #include "hw/arm/guest-services/general.h"
 #include "hw/arm/guest-services/gles.h"
 #include "hw/arm/guest-package.h"
@@ -50,11 +51,13 @@
 #include "ui/input.h"
 
 #define TYPE_N94_MACHINE MACHINE_TYPE_NAME("iPhone-4S")
+#define N94_MAX_CPUS 2                   /* the A5's two Cortex-A9s (DT cpus/cpu0, cpu1) */
 OBJECT_DECLARE_SIMPLE_TYPE(N94MachineState, N94_MACHINE)
 
 struct N94MachineState {
     MachineState parent;
-    ARMCPU *cpu;
+    ARMCPU *cpu;                         /* cpu0, the boot core */
+    ARMCPU *cpus[N94_MAX_CPUS];
     MemoryRegion dram;
     MemoryRegion dram_lo;                /* DRAM's first page at PA 0 (the kernel's reset-vector page) */
     DeviceState *aic;
@@ -72,6 +75,7 @@ struct N94MachineState {
     char *kboot_path;
     char *nand_path;                     /* nand=: the PPN page store directory (tools/ios-prep nand) */
     GuestPackage pkg;                    /* the GL front end's hello, guest packages (hw/arm/guest-package.c) */
+    CPUState *gl_owner;                  /* the vCPU whose host thread has the GL contexts current */
 };
 
 #define KBOOT_MAGIC "K48KBOOT"
@@ -98,7 +102,11 @@ static void n94_cpu_reset(void *opaque)
     const uint8_t *trailer;
     uint32_t load_pa, entry_pa, bootargs_pa, image_len;
 
-    cpu_reset(cs);
+    for (int i = 0; i < N94_MAX_CPUS; i++) {
+        if (s->cpus[i]) {
+            cpu_reset(CPU(s->cpus[i]));      /* cpu1 comes out of reset powered off */
+        }
+    }
     /* A reboot sends no GL teardown for its old processes. */
     gles_host_reset();
     guest_pkg_reset(&s->pkg);
@@ -357,9 +365,8 @@ static const MemoryRegionOps n94_sac_ops = {
  * probe, and the front end's hello and guest packages (guest-package.c); the A4
  * boards' pasteboard and agent are not wired.
  */
-static void n94_qemu_call(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+static void n94_qemu_call_on(CPUState *cs, uint64_t value)
 {
-    CPUState *cs = env_cpu(env);
     N94MachineState *s = N94_MACHINE(qdev_get_machine());
     qemu_call_t q;
     int32_t err = 0;
@@ -383,6 +390,35 @@ static void n94_qemu_call(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t val
     cpu_memory_rw_debug(cs, value, (uint8_t *)&q, sizeof(q), 1);
 }
 
+static void n94_gl_release_work(CPUState *cpu, run_on_cpu_data data)
+{
+    gles_host_release_thread();
+}
+
+/*
+ * The calls run on the trapping vCPU's thread: a GL call may raise a guest exception on its caller
+ * (ARM_CP_RAISES_EXC, a page to fault in), which only that thread can take. The host's GL contexts
+ * follow: an EGL context is current on one thread at a time, and with the two vCPUs on threads of
+ * their own (MTTCG) ANGLE refused the context on cpu1's and CoreAnimation drew nothing. So a call
+ * from a vCPU other than the one whose thread holds the contexts first has that thread let go of
+ * them (gles_host_release_thread, run there) and waits; it counts as out of its execution loop
+ * meanwhile, since the holder may itself be waiting for exclusive work (the guest's broadcast TLB
+ * maintenance) that needs every vCPU outside it.
+ */
+static void n94_qemu_call(CPUARMState *env, const ARMCPRegInfo *ri, uint64_t value)
+{
+    CPUState *cs = env_cpu(env);
+    N94MachineState *s = N94_MACHINE(qdev_get_machine());
+
+    if (s->gl_owner && s->gl_owner != cs) {
+        cpu_exec_end(cs);
+        run_on_cpu(s->gl_owner, n94_gl_release_work, RUN_ON_CPU_NULL);
+        cpu_exec_start(cs);
+    }
+    s->gl_owner = cs;
+    n94_qemu_call_on(cs, value);
+}
+
 static const ARMCPRegInfo n94_cp_reginfo[] = {
     { .name = "QEMU_CALL", .cp = 15, .opc1 = 3, .crn = 15, .crm = 15,
       .opc2 = 0, .access = PL0_RW, .state = ARM_CP_STATE_AA32,
@@ -390,6 +426,30 @@ static const ARMCPRegInfo n94_cp_reginfo[] = {
       .readfn = qemu_call_status,
       .writefn = n94_qemu_call },
 };
+
+/*
+ * The PMGR's core control (enable_core): core n powers on at its reset vector, PA 0, where the
+ * kernel has copied its exception vectors (its reset handler takes the secondary from there), in
+ * SVC mode with the MMU off, as a core leaving reset on the A5; or powers off.
+ */
+static void n94_core_enable(void *opaque, int n, int level)
+{
+    N94MachineState *s = opaque;
+    int ret;
+
+    if (n == 0 || n >= N94_MAX_CPUS || !s->cpus[n]) {
+        return;
+    }
+    if (level) {
+        ret = arm_set_cpu_on(s->cpus[n]->mp_affinity, 0, 0, 1, false);
+    } else {
+        ret = arm_set_cpu_off(s->cpus[n]->mp_affinity);
+    }
+    if (ret != QEMU_ARM_POWERCTL_RET_SUCCESS && ret != QEMU_ARM_POWERCTL_ALREADY_ON &&
+        ret != QEMU_ARM_POWERCTL_IS_OFF) {
+        warn_report("n94: cpu%d power %s failed (%d)", n, level ? "on" : "off", ret);
+    }
+}
 
 static void n94_init(MachineState *machine)
 {
@@ -406,21 +466,26 @@ static void n94_init(MachineState *machine)
     }
 
     /*
-     * One Cortex-A9 for bring-up: the kboot device tree unmatches cpus/cpu1
-     * (ios-prep --cpus 1), so the kernel never tries to start it.
+     * The Cortex-A9s, -smp 1 or 2. cpu1 comes out of reset powered off, as on the
+     * A5, until the kernel's enable_core (the PMGR) starts it. With -smp 1 the kboot
+     * device tree must not show cpu1 (ios-prep --cpus 1), or the kernel waits for it.
      */
-    cpuobj = object_new(machine->cpu_type);
-    s->cpu = ARM_CPU(cpuobj);
-    object_property_set_link(cpuobj, "memory", OBJECT(sysmem), &error_abort);
-    if (object_property_find(cpuobj, "has_el3")) {
-        object_property_set_bool(cpuobj, "has_el3", false, &error_fatal);
+    for (i = 0; i < machine->smp.cpus; i++) {
+        cpuobj = object_new(machine->cpu_type);
+        s->cpus[i] = ARM_CPU(cpuobj);
+        object_property_set_link(cpuobj, "memory", OBJECT(sysmem), &error_abort);
+        if (object_property_find(cpuobj, "has_el3")) {
+            object_property_set_bool(cpuobj, "has_el3", false, &error_fatal);
+        }
+        if (object_property_find(cpuobj, "has_el2")) {
+            object_property_set_bool(cpuobj, "has_el2", false, &error_fatal);
+        }
+        object_property_set_bool(cpuobj, "start-powered-off", i > 0, &error_fatal);
+        object_property_set_bool(cpuobj, "realized", true, &error_fatal);
+        define_arm_cp_regs(s->cpus[i], n94_cp_reginfo);
+        object_unref(cpuobj);
     }
-    if (object_property_find(cpuobj, "has_el2")) {
-        object_property_set_bool(cpuobj, "has_el2", false, &error_fatal);
-    }
-    object_property_set_bool(cpuobj, "realized", true, &error_fatal);
-    define_arm_cp_regs(s->cpu, n94_cp_reginfo);
-    object_unref(cpuobj);
+    s->cpu = s->cpus[0];
 
     memory_region_init_ram(&s->dram, NULL, "n94.dram", S5L8940_DRAM_SIZE, &error_fatal);
     memory_region_add_subregion(sysmem, S5L8940_DRAM_BASE, &s->dram);
@@ -448,8 +513,10 @@ static void n94_init(MachineState *machine)
     qdev_prop_set_uint32(dev, "num-irqs", S5L8940_AIC_NUM_IRQS);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_AIC_BASE);
-    sysbus_connect_irq(sbd, S5L8940_AIC_IRQ(0), qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_IRQ));
-    sysbus_connect_irq(sbd, S5L8940_AIC_FIQ(0), qdev_get_gpio_in(DEVICE(s->cpu), ARM_CPU_FIQ));
+    for (i = 0; i < machine->smp.cpus; i++) {
+        sysbus_connect_irq(sbd, S5L8940_AIC_IRQ(i), qdev_get_gpio_in(DEVICE(s->cpus[i]), ARM_CPU_IRQ));
+        sysbus_connect_irq(sbd, S5L8940_AIC_FIQ(i), qdev_get_gpio_in(DEVICE(s->cpus[i]), ARM_CPU_FIQ));
+    }
 
     /*
      * PMGR: the A4 model (PLLs, clock gates, event timers, POWER_ID). The A5
@@ -462,8 +529,13 @@ static void n94_init(MachineState *machine)
     qdev_prop_set_uint8(dev, "board-id", 0x08);     /* N94AP */
     qdev_prop_set_uint32(dev, "gates", 0x78);       /* the kernel polls gate 0x44 and pulses 0x5c */
     qdev_prop_set_bit(dev, "clkcfg-hi", true);      /* clock configs at 0x200-0x300 too */
+    qdev_prop_set_uint32(dev, "cores", N94_MAX_CPUS);
     sysbus_realize_and_unref(sbd, &error_fatal);
     sysbus_mmio_map(sbd, 0, S5L8940_PMGR_BASE);
+    for (i = 0; i < N94_MAX_CPUS; i++) {
+        qdev_connect_gpio_out_named(dev, "core-enable", i,
+                                    qemu_allocate_irq(n94_core_enable, s, i));
+    }
 
     dev = qdev_new(TYPE_S5L8930_GPIO);
     s->gpio = dev;
@@ -773,7 +845,7 @@ static void n94_class_init(ObjectClass *klass, const void *data)
 
     mc->desc = "iPhone 4S (N94AP, S5L8940X)";
     mc->init = n94_init;
-    mc->max_cpus = 2;
+    mc->max_cpus = N94_MAX_CPUS;
     mc->default_cpus = 1;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("cortex-a9");
     mc->minimum_page_bits = 12;

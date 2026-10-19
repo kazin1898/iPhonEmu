@@ -57,6 +57,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "qemu/cutils.h"
 #include "hw/core/irq.h"
 #include "qapi/error.h"
 #include "hw/core/qdev-properties.h"
@@ -126,6 +127,7 @@ typedef struct S5L8940AICCpu {
     uint32_t tmr_state;
     uint32_t tmr_int_stat;
     uint64_t tmr_start;         /* timebase tick the countdown began at */
+    uint32_t claimed[AIC_WORDS];  /* vectors this CPU's IACK took, hidden from the others */
     QEMUTimer *timer;
     struct S5L8940AICState *aic;
     int index;
@@ -134,6 +136,7 @@ typedef struct S5L8940AICCpu {
 struct S5L8940AICState {
     SysBusDevice parent_obj;
     MemoryRegion iomem;
+    MemoryRegion time_mr;       /* TIME_LO/HI, read with no BQL (see aic_time_read) */
 
     uint32_t num_cpus;
     uint32_t num_irqs;
@@ -183,11 +186,26 @@ static unsigned aic_current_cpu(S5L8940AICState *s)
     return c < s->num_cpus ? c : 0;
 }
 
-/* The vector IACK would report to CPU c, or -1. Lowest number first. */
+/*
+ * The vector IACK would report to CPU c, or -1. Lowest number first.
+ *
+ * A vector targets both cores (TARGET_CPU = 3 for every registered one but the per-CPU lines) and
+ * is taken by one of them: the core whose IACK reads it first claims it, and the other core no
+ * longer sees it (its IRQ drops, or its IACK goes on to the next event) until the claiming core's
+ * dispatch loop is over, its IACK reading "none". Delivered to both, the display pipe's interrupt
+ * ran its handler on both cores at once and the second one panicked on a status the first had
+ * cleared ("Unexpected Display Pipe interrupt").
+ */
 static int aic_pending_vector(S5L8940AICState *s, unsigned c)
 {
     for (unsigned w = 0; w < DIV_ROUND_UP(s->num_irqs, 32); w++) {
         uint32_t pend = (s->hw_state[w] | s->sw_state[w]) & ~s->mask[w];
+
+        for (unsigned o = 0; o < s->num_cpus; o++) {
+            if (o != c) {
+                pend &= ~s->cpu[o].claimed[w];
+            }
+        }
 
         while (pend) {
             unsigned n = w * 32 + ctz32(pend);
@@ -223,7 +241,15 @@ static uint32_t aic_iack(S5L8940AICState *s, unsigned c)
     uint32_t ipi;
 
     if (n >= 0) {
+        if (!(cpu->claimed[n / 32] & (1u << (n % 32)))) {
+            cpu->claimed[n / 32] |= 1u << (n % 32);
+            aic_update(s);
+        }
         return (IACK_TYPE_IRQ << IACK_TYPE_SHIFT) | n;
+    }
+    if (!buffer_is_zero(cpu->claimed, sizeof(cpu->claimed))) {
+        memset(cpu->claimed, 0, sizeof(cpu->claimed));
+        aic_update(s);
     }
     ipi = aic_pending_ipi(cpu);
     if (ipi & IPI_OTHER) {
@@ -482,6 +508,35 @@ static void s5l8940_aic_write(void *opaque, hwaddr off, uint64_t val64, unsigned
     aic_update(s);
 }
 
+/*
+ * TIME_LO/TIME_HI on their own, BQL free: the kernel's mach_absolute_time reads HI, LO, HI on every
+ * call, and with two vCPUs on threads of their own (MTTCG) every MMIO access through the main region
+ * takes the BQL. Sampled over the gdbstub during a two-core boot, both vCPUs spent about a sixth of
+ * their time on that loop, contending for the lock. The counter is the virtual clock's, which any
+ * thread may read.
+ */
+static uint64_t aic_time_read(void *opaque, hwaddr off, unsigned size)
+{
+    S5L8940AICState *s = opaque;
+    uint64_t t = aic_ticks(s);
+
+    return off == AIC_TIME_HI - AIC_TIME_LO ? t >> 32 : (off == 0 ? (uint32_t)t : 0);
+}
+
+static void aic_time_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
+{
+    qemu_log_mask(LOG_GUEST_ERROR, "s5l8940_aic: write to the timebase +0x%02x\n",
+                  (unsigned)(AIC_TIME_LO + off));
+}
+
+static const MemoryRegionOps s5l8940_aic_time_ops = {
+    .read = aic_time_read,
+    .write = aic_time_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .impl.min_access_size = 4,
+    .impl.max_access_size = 4,
+};
+
 static const MemoryRegionOps s5l8940_aic_ops = {
     .read = s5l8940_aic_read,
     .write = s5l8940_aic_write,
@@ -520,6 +575,7 @@ static void s5l8940_aic_reset(DeviceState *dev)
         cpu->ipi_mask = IPI_OTHER | IPI_SELF;
         cpu->tmr_cfg = cpu->tmr_load = cpu->tmr_state = cpu->tmr_int_stat = 0;
         cpu->tmr_start = 0;
+        memset(cpu->claimed, 0, sizeof(cpu->claimed));
     }
     aic_update(s);
 }
@@ -547,6 +603,10 @@ static void s5l8940_aic_init(Object *obj)
 
     memory_region_init_io(&s->iomem, obj, &s5l8940_aic_ops, s, TYPE_S5L8940_AIC,
                           S5L8940_AIC_SIZE);
+    memory_region_init_io(&s->time_mr, obj, &s5l8940_aic_time_ops, s, TYPE_S5L8940_AIC ".time",
+                          AIC_TIME_HI + 4 - AIC_TIME_LO);
+    memory_region_enable_lockless_io(&s->time_mr);
+    memory_region_add_subregion_overlap(&s->iomem, AIC_TIME_LO, &s->time_mr, 1);
     sysbus_init_mmio(sbd, &s->iomem);
     for (unsigned c = 0; c < AIC_MAX_CPUS; c++) {
         sysbus_init_irq(sbd, &s->cpu[c].irq);
@@ -572,7 +632,7 @@ static void s5l8940_aic_finalize(Object *obj)
 
 static const VMStateDescription vmstate_s5l8940_aic_cpu = {
     .name = "s5l8940.aic.cpu",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT32(ipi_pending, S5L8940AICCpu),
@@ -582,6 +642,7 @@ static const VMStateDescription vmstate_s5l8940_aic_cpu = {
         VMSTATE_UINT32(tmr_state, S5L8940AICCpu),
         VMSTATE_UINT32(tmr_int_stat, S5L8940AICCpu),
         VMSTATE_UINT64(tmr_start, S5L8940AICCpu),
+        VMSTATE_UINT32_ARRAY_V(claimed, S5L8940AICCpu, AIC_WORDS, 2),
         VMSTATE_TIMER_PTR(timer, S5L8940AICCpu),
         VMSTATE_END_OF_LIST()
     }

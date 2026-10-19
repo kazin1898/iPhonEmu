@@ -56,7 +56,10 @@ class Rsp:
         self._send("c")
 
     def regs(self):
-        g = bytes.fromhex(self.cmd("g"))
+        g = self.cmd("g")
+        while g[0] in "ST":                  # a stop reply still queued from the attach
+            g = self._recv_packet()
+        g = bytes.fromhex(g)
         return struct.unpack_from("<16I", g)
 
     def mem(self, addr, n):

@@ -13,7 +13,7 @@ that this project started as lives on the `s5lbox-3g` branch.
 ## Status
 
 <!-- progress:start -->
-![overall](https://img.shields.io/badge/overall-56.9%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
+![overall](https://img.shields.io/badge/overall-59.7%25-yellow) ![milestones](https://img.shields.io/badge/milestones-3%2F4-blue) ![updated](https://img.shields.io/badge/updated-2026-10-19-lightgrey)
 
 [![progress map](docs/progress/progress-map.svg)](docs/progress/progress.json)
 
@@ -27,8 +27,8 @@ goal, weighted by effort (`docs/progress/progress.json`); `tools/dev/progress_ma
 | System: Boot to launchd (userland) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | System: Storage: IOP, PPN NAND, FTL, NVRAM | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | System: Persistence (data volume, NVRAM across boots) | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
-| Processor and platform: Cortex-A9 core, TCG | 🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜ | 70% |
-| Processor and platform: Apple AIC and timers | 🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜ | 80% |
+| Processor and platform: Cortex-A9 core, TCG | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
+| Processor and platform: Apple AIC and timers | 🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 | 100% |
 | Processor and platform: PMGR clocks, GPIO, DWI, watchdog, PL310 | 🟩🟩🟩🟩🟩🟨⬜⬜⬜⬜ | 55% |
 | Processor and platform: PMU D1881, I2C, sensors | 🟩🟩🟩🟩🟩⬜⬜⬜⬜⬜ | 50% |
 | Processor and platform: DMA (CDMA) and crypto (AES, SHA, PKE) | 🟩🟩🟩🟩🟩🟩⬜⬜⬜⬜ | 60% |

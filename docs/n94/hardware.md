@@ -612,6 +612,56 @@ its own idle exit and no report is written (below). icount (`-icount shift=0,sle
 kill, by running the guest's clock on executed instructions, but the guest's time-of-day then fell behind
 the host's by the boot's busy time; not adopted.
 
+## SMP: the second Cortex-A9 (2026-10-19)
+
+The machine has `-smp 1` or `2` (`device boot` passes 2, and the bundle's device tree shows both `cpus`
+nodes with no `cpus=1` boot-arg; `ios-prep --cpus 1` keeps the old single-core bring-up). What the kernel
+does to start cpu1, as traced and decoded:
+
+- **AppleARMCPU::start** (AppleARMPlatform, 0x803c2ff0) counts the `/cpus` children (lowered by `cpus=`),
+  creates the IOCPUInterruptController for that many, registers each core with `ml_processor_register`
+  and `processor_start`s the secondary; `PE_cpu_start` reaches the DT's `function-enable_core`, which is
+  the PMGR's platform function `'Core'` with argument `1 << n` (cpu0 1, cpu1 2).
+- **'Core' in the PMGR kext** (0x808fe828; register writes go through its accessor at 0x808ff248):
+  start = `0x1214 <- mask`, `0x1220 <- mask`, then `0x1204 <- 0`; stop = `0x1210 <- mask`. At start the
+  kext writes `0x1200 <- 0x7ffe` and `0x1204 <- 0x3fff8001` (0x808feeec). The model's PMGR (`cores`
+  property) raises its `core-enable` line n on the start and lowers it on the stop; `n94.c` powers the
+  CPU on with `arm_set_cpu_on` at **PA 0**, SVC mode, MMU off (the 6.x kernel copies its exception vectors
+  to PA 0 "for a core reset to land on", and its reset handler takes the secondary from there), or off.
+  cpu1 is created `start-powered-off`; a machine reset powers it off again.
+- **Interrupt delivery.** Every registered vector targets both cores (`TARGET_CPU` = 3), but one core
+  takes it: delivered to both, the display pipe's handler ran on both at once and cpu1 panicked
+  (`Unexpected Display Pipe interrupt, pssible hperf block corruption: 00000100`, the status cpu0 had
+  already cleared). The AIC model now lets the core whose IACK reads a vector first claim it; the other
+  core stops seeing it until the claimer's dispatch loop ends (its IACK reads "none"). Which core the
+  hardware picks is unknown; nothing in the kext depends on it.
+- **IPIs and the per-CPU timer** need nothing new: IPI_SET bit n reaches core n as "other", bit 31 the
+  sender as "self", and cpu1's timer is its own bank (`0x5090 <- 1` at start), its FIQ wired to cpu1.
+- **Two host threads (MTTCG).** QEMU runs each vCPU on a thread of its own, the default for this guest
+  on an x86 host, and the only way that boots: with both vCPUs on one thread (`-accel tcg,thread=single`)
+  the kernel panicked early (`spin lock timeout`), a core spinning on a lock the other only releases at
+  the next round-robin slice while the timebase runs in host time. Two things had to follow:
+  - **The GL bridge.** An EGL context is current on one thread at a time; `gles-host` keeps it current
+    on the thread that called, and CoreAnimation's calls now also come from cpu1's thread: ANGLE refused
+    the context there and the panel stayed black after the boot logo. The calls run on the trapping
+    vCPU's thread (a call may raise a guest exception on its caller, `ARM_CP_RAISES_EXC`; running it on
+    cpu0's thread instead crashed QEMU in `cpu_exec_longjmp_cleanup`), and a call from the other vCPU
+    first has the holder's thread release the contexts (`gles_host_release_thread`, after landing the
+    frame in flight) through `run_on_cpu`, outside its execution loop while it waits (`cpu_exec_end`),
+    since the holder may be waiting for exclusive work (the guest's broadcast TLB maintenance): without
+    that QEMU hung. Under 500 such hand-overs in a boot to Setup.
+  - **The timebase without the BQL.** Every MMIO access takes the big QEMU lock, and `mach_absolute_time`
+    (0x80087b20) reads TIME_HI, TIME_LO, TIME_HI on every call: sampled over the gdbstub, both vCPUs sat
+    on that loop a sixth of the time. TIME_LO/HI are now a region of their own with lockless I/O.
+- **Measured** (`gl6`, a 16 GiB unit at Setup's welcome screen, GL firmware, store on the host's HDD,
+  the same QEMU binary): Setup's screen at **88 s with one core, 59 s with two**; before the lockless
+  timebase two cores took 90 s. Both vCPU threads are busy for the first minute and nearly idle (`wfi`)
+  after. Still on the table for speed: the kernel's `TLBIMVAIS` loops (0x80087350), each a cross-vCPU
+  flush in QEMU (exclusive work per page).
+- **Checked**: `tools/dev/xnu_sysctl.py` reads the guest's hw counts over the gdbstub (`hw.ncpu: 2`,
+  `hw.activecpu: 2`, `hw.physicalcpu: 2`, `hw.logicalcpu_max: 2`); the kernel has no `machine_info`
+  symbol, so the tool takes its address from `host_info`'s literal pool (0x802d01a8 in 10B329).
+
 ## Display: the pipe as iBoot leaves it, and the A5's layer MMU (M3 work, 2026-10-17)
 
 The A4 display model (`hw/arm/s5l8930_display.c`: DisplayPipe0, CLCD, RGBOUT and its control block, TV-out)
@@ -688,9 +738,9 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
 
 1. ~~AIC register map~~: confirmed against the kext (section above). Still open in the model: which GLB_CFG
    bit gates the timer FIQ, whether the timer reload is a true auto-reload or a count that keeps running,
-   the per-CPU timer on cpu1 (`0x5090 <- 1` at start, no FIQ line yet), and what the kernel expects of an
-   IPI it sends itself (0x2008 <- 0x80000000 while the IPI vector is still masked; with the clock running it
-   moves on).
+   which core the hardware hands a vector targeting both (the model: the first IACK claims it, "SMP"),
+   and what the kernel expects of an IPI it sends itself (0x2008 <- 0x80000000 while the IPI vector is
+   still masked; with the clock running it moves on). cpu1's timer FIQ is wired since the SMP work.
 2. **PMGR timer / clock table**: the A5's `clock-frequencies` index map; `ios-prep` writes the A4 map. The
    A5 PMGR has registers the A4 model does not know and the kernel reads back as zero without complaint so
    far: clock configs 0x220-0x254 and 0x2f0-0x2f8, 0x3c, gates 0x1110-0x115c and 0x1180, 0x1204, 0x2108
@@ -718,7 +768,7 @@ iBoot-1537 task kernel with "iop", "console", "iop message" and "audio" tasks an
    keybagd running) the same day. The data volume is journaled (an 8 MiB journal), and the PMU's standby and
    the codec's power-down are modeled since 2026-10-19, so a halt flushes the FTL and powers off.
 7. **Wi-Fi over HSIC**: an HSIC BCM4330 is a new device; a stub (device absent) suffices until M4.
-8. **SMP**: `function-enable_core` / `ipi_dispatch` on `cpus`: what the kernel pokes to start cpu1.
+8. ~~**SMP**~~: done 2026-10-19 (section "SMP"): enable_core is the PMGR's `'Core'`, two vCPUs on MTTCG.
 9. ~~**Audio, the M3 gate**~~: the AE2 is modeled (section "The AE2" above), the codec, Highland Park and
    mediaserverd start. Open: no PCM reaches the host (no I2S DMA was seen; i2s0 has no "audio-out" yet), and
    the AE2's audio endpoints (rings 2-7) have not carried a message yet, so their protocol is unread.

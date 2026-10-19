@@ -409,6 +409,8 @@ int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
                        uint32_t argc, const uint32_t *args);
 void gles_host_stats(uint64_t *draws, uint64_t *presents);
 void gles_host_reset(void);
+/* Release the GL context current on the calling thread (SMP machines, see gles-host.c). */
+void gles_host_release_thread(void);
 int gles_host_context_count(void);
 /* Every refusal the bridge makes, by name ("surface:A008", "teximage:0x1906/0x8033",
  * "slot:807"), counted per call and logged once; a guest shim reports its own through

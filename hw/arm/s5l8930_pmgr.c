@@ -52,6 +52,19 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8930PMGRState, S5L8930_PMGR)
 #define CLKCFG_HI_END       0x300
 
 #define PMGR_GATE_CTL       0x1200
+
+/*
+ * The A5's core control ("cores" property; pmgr,s5l8940x). The DT cpus nodes' enable_core is the
+ * PMGR platform function 'Core' with argument 1 << n; the 10B329 PMGR kext starts core n with
+ * CORE_START <- mask, CORE_RUN <- mask, then 0x1204 <- 0, and stops it with CORE_STOP <- mask.
+ * At start it writes 0x1200 <- 0x7ffe and 0x1204 <- 0x3fff8001. Core n's state goes out on the
+ * "core-enable" GPIO line n, for the machine to power the CPU on (at its reset vector) or off.
+ */
+#define PMGR_CORE_STOP      0x1210
+#define PMGR_CORE_START     0x1214
+#define PMGR_CORE_RUN       0x1220
+#define PMGR_MAX_CORES      2
+
 #define PMGR_TICKS_LO       0x2000
 #define PMGR_TICKS_HI       0x2004
 #define PMGR_EVT_COUNT(n)   (0x2008 + 4 * (n))
@@ -89,6 +102,9 @@ struct S5L8930PMGRState {
     uint8_t board_id;           /* POWER_ID[23:16], the board straps */
     uint32_t gates;             /* "gates": clock gates at 0x1010 (A4 0x40, A5 more) */
     bool clkcfg_hi;             /* "clkcfg-hi": 0x200-0x300 are clock configs too (A5) */
+    uint32_t cores;             /* "cores": the A5's core control at 0x1200-0x1220 (0: none) */
+    uint32_t core_on;           /* bit n: core n running (core 0 from reset) */
+    qemu_irq core_enable[PMGR_MAX_CORES];
     int64_t tick_base_ns;
     bool keep_timebase;         /* "keep-timebase": the next reset is the AP's wake, see reset */
     S5L8930EventTimer evt[2];
@@ -173,6 +189,7 @@ static bool pmgr_modeled(S5L8930PMGRState *s, hwaddr off)
            pmgr_clkcfg(s, off) ||
            (off >= GATE_START && off < GATE_END(s)) ||
            off == PMGR_GATE_CTL ||
+           (s->cores && off >= PMGR_GATE_CTL && off <= PMGR_CORE_RUN) ||
            (off >= PMGR_TICKS_LO && off <= PMGR_WDOG_CTL) ||
            off == PMGR_CLOCK_CON1 || off == PMGR_POWER_ID;
 }
@@ -349,6 +366,21 @@ static void s5l8930_pmgr_write(void *opaque, hwaddr off, uint64_t val64,
     case PMGR_EVT_STATE(1):
         evt_write_state(s, &s->evt[(off - PMGR_EVT_STATE(0)) / 4], val);
         return;
+    case PMGR_CORE_STOP:
+    case PMGR_CORE_START:
+        if (s->cores) {
+            uint32_t mask = val & MAKE_64BIT_MASK(0, s->cores);
+
+            s->core_on = off == PMGR_CORE_START ? s->core_on | mask : s->core_on & ~mask;
+            for (unsigned n = 0; n < s->cores; n++) {
+                if (mask & (1u << n)) {
+                    trace_s5l8930_pmgr_core(n, off == PMGR_CORE_START);
+                    qemu_set_irq(s->core_enable[n], off == PMGR_CORE_START);
+                }
+            }
+        }
+        s->regs[off / 4] = val;
+        return;
     case PMGR_WDOG_TMR:
     case PMGR_WDOG_RST:
     case PMGR_WDOG_CTL:
@@ -413,6 +445,7 @@ static void s5l8930_pmgr_reset(DeviceState *dev)
 
     timer_del(s->wdog_timer);
     s->wdog_start = 0;
+    s->core_on = 1;             /* the machine's reset leaves the other cores off */
     /*
      * The 24 MHz timebase keeps counting across the AP's hibernate: xnu's
      * mach_absolute_time must not go back, or every timer armed before the sleep
@@ -456,6 +489,7 @@ static void s5l8930_pmgr_init(Object *obj)
     memory_region_init_io(&s->iomem, obj, &s5l8930_pmgr_ops, s,
                           TYPE_S5L8930_PMGR, S5L8930_PMGR_SIZE);
     sysbus_init_mmio(sbd, &s->iomem);
+    qdev_init_gpio_out_named(DEVICE(obj), s->core_enable, "core-enable", PMGR_MAX_CORES);
     for (i = 0; i < ARRAY_SIZE(s->evt); i++) {
         sysbus_init_irq(sbd, &s->evt[i].irq);
         s->evt[i].timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, evt_expire,
@@ -502,7 +536,7 @@ static void s5l8930_pmgr_finalize(Object *obj)
 
 static const VMStateDescription vmstate_s5l8930_pmgr = {
     .name = TYPE_S5L8930_PMGR,
-    .version_id = 2,
+    .version_id = 3,
     .minimum_version_id = 1,
     .post_load = s5l8930_pmgr_post_load,
     .fields = (const VMStateField[]) {
@@ -510,6 +544,7 @@ static const VMStateDescription vmstate_s5l8930_pmgr = {
         VMSTATE_INT64(tick_base_ns, S5L8930PMGRState),
         VMSTATE_TIMER_PTR_V(wdog_timer, S5L8930PMGRState, 2),
         VMSTATE_UINT64_V(wdog_start, S5L8930PMGRState, 2),
+        VMSTATE_UINT32_V(core_on, S5L8930PMGRState, 3),
         VMSTATE_STRUCT_ARRAY(evt, S5L8930PMGRState, 2, 1,
                              vmstate_s5l8930_evt, S5L8930EventTimer),
         VMSTATE_END_OF_LIST()
@@ -521,6 +556,7 @@ static const Property s5l8930_pmgr_props[] = {
     DEFINE_PROP_UINT8("board-id", S5L8930PMGRState, board_id, 0x02),   /* K48 */
     DEFINE_PROP_UINT32("gates", S5L8930PMGRState, gates, 0x40),
     DEFINE_PROP_BOOL("clkcfg-hi", S5L8930PMGRState, clkcfg_hi, false),
+    DEFINE_PROP_UINT32("cores", S5L8930PMGRState, cores, 0),
 };
 
 static void s5l8930_pmgr_class_init(ObjectClass *klass, const void *data)

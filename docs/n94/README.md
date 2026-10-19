@@ -109,11 +109,12 @@ repository. Each command takes it.
    `nand-enable-reformat=1`, AE2 hidden), and QEMU until `it_install: done`. QEMU is then quit through
    the monitor on a stdin pipe, as `run-install.sh` did. `FAIL`, a kernel panic or the time limit (`--limit`,
    default 1200 s + 150 s per GiB) marks the device `failed` and points at its serial log.
-4. **Normal bundle.** `<root>/NAME/kboot.bin`, the same geometry and identity, AE2 shown. `device.json`
-   says `ready`.
+4. **Normal bundle.** `<root>/NAME/kboot.bin`, the same geometry and identity, AE2 shown, both cores in
+   the device tree (the install boot runs on one). `device.json` says `ready`.
 
-`device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [-- QEMU ARGS]` runs `-M
-iPhone-4S,kboot=<dev>/kboot.bin,nand=<dev>/nand`, with the serial log in `<dev>/logs/serial.log`. It
+`device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [--cpus 1|2] [-- QEMU ARGS]` runs `-M
+iPhone-4S,kboot=<dev>/kboot.bin,nand=<dev>/nand -smp 2` (the A5's two Cortex-A9s, hardware.md "SMP"; `--cpus 1`
+rebuilds the bundle for one core, and back), with the serial log in `<dev>/logs/serial.log`. It
 opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh` does. On the devices measured below, the first boot showed Setup's welcome screen within 4 minutes (M3's
 first boot had a 14-minute data migration first). Setup goes on to the home screen with no activation
 page ("Activation").

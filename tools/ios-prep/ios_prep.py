@@ -443,11 +443,15 @@ def ensure_firmware(args, ip):
     return fw
 
 
-def device_kboot(dev, fw, meta, install):
+DEVICE_CPUS = 2          # the A5's two Cortex-A9s; the install boot keeps to one
+
+
+def device_kboot(dev, fw, meta, install, cpus=DEVICE_CPUS):
     """dev's bundle for the install boot (the install ramdisk as root, the FTL allowed to format a blank
-    store, the AE2 hidden) or for the normal boot, built for dev's geometry and with dev's identity."""
+    store, the AE2 hidden; one core) or for the normal boot (cpus cores), built for dev's geometry and
+    with dev's identity."""
     return build_kboot(fw, argparse.Namespace(
-        cpus=1, nand=store_geometry(dev.nand), boot_args=None, verbose_boot=False, seed=meta["seed"],
+        cpus=1 if install else cpus, nand=store_geometry(dev.nand), boot_args=None, verbose_boot=False, seed=meta["seed"],
         identity_dir=dev.dir, ipsw=None, keys=None,
         add_boot_arg=["nand-enable-reformat=1"] if install else None,
         hide=["arm-io/ae2"] if install else None,
@@ -524,6 +528,15 @@ def cmd_device_refresh(args):
     install_device(dev, meta["firmware"], meta, args)
 
 
+def bundle_cpus(bundle):
+    """The cores a bundle's device tree shows (its .json), 1 for a bundle made before it was recorded."""
+    try:
+        with open(os.path.splitext(bundle)[0] + ".json") as f:
+            return int(json.load(f).get("cpus", 1))
+    except (OSError, ValueError):
+        return 1
+
+
 def boot_logo_current(bundle, fw):
     """False when fw has a boot logo and bundle's .json does not record one (a bundle made before
     build_kboot drew it)."""
@@ -545,8 +558,11 @@ def cmd_device_boot(args):
                          "re-runs its install boot")
     if not boot_logo_current(dev.kboot, meta["firmware"]):
         log("kboot.bin predates the boot logo: building it again (same geometry and identity)")
-        device_kboot(dev, meta["firmware"], meta, install=False)
-    extra = args.qemu_args
+        device_kboot(dev, meta["firmware"], meta, install=False, cpus=args.cpus)
+    elif bundle_cpus(dev.kboot) != args.cpus:
+        log(f"kboot.bin shows {bundle_cpus(dev.kboot)} core(s): building it again for {args.cpus}")
+        device_kboot(dev, meta["firmware"], meta, install=False, cpus=args.cpus)
+    extra = ["-smp", str(args.cpus)] + list(args.qemu_args)
     log(f"booting {args.name!r} ({meta['product']} {meta['version']} {meta['build']}, {meta['storage_gib']} GiB); "
         f"serial log {os.path.join(dev.logs, 'serial.log')}"
         + (f"; QMP on {args.qmp} and {args.qmp + 1} (tools/dev/n94_input.py --port)" if args.qmp else ""))
@@ -621,6 +637,8 @@ def add_device_parsers(sub):
     q.add_argument("--qmp", type=int, default=4444,
                    help="QMP on this TCP port and the next (tools/dev/n94_input.py; default 4444, 0 for none)")
     q.add_argument("--detach", action="store_true", help="return once QEMU has started")
+    q.add_argument("--cpus", type=int, choices=(1, 2), default=DEVICE_CPUS,
+                   help=f"cores (default {DEVICE_CPUS}, as the A5; the bundle is rebuilt when it shows another count)")
     q.set_defaults(fn=cmd_device_boot)     # more QEMU arguments after a lone --
     q = parser("list", "the devices and their state")
     q.set_defaults(fn=cmd_device_list)

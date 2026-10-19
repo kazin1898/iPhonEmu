@@ -42,15 +42,15 @@
       "items": [
         {
           "name": "Cortex-A9 core, TCG",
-          "percent": 70,
+          "percent": 100,
           "weight": 4,
-          "note": "one core boots; second core, IPIs and SMP bring-up pending"
+          "note": "both cores (-smp 2, MTTCG; device boot's default): enable_core is the PMGR's 'Core' (0x1214/0x1220), cpu1 starts at its reset vector; hw.ncpu = 2 read from the kernel; Setup at 59 s on two cores against 88 s on one; 13 min stable"
         },
         {
           "name": "Apple AIC and timers",
-          "percent": 80,
+          "percent": 100,
           "weight": 3,
-          "note": "vectors, masks, per-CPU timer FIQ; IPI and cpu1 timer open"
+          "note": "vectors, masks, per-CPU timers and IPIs on both cores; an IACK claims a vector for its core (both handled the same IRQ before); TIME_LO/HI read with no BQL (mach_absolute_time)"
         },
         {
           "name": "PMGR clocks, GPIO, DWI, watchdog, PL310",

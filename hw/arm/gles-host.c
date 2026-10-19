@@ -4785,6 +4785,20 @@ void gles_host_writeback_sync(void)
 #endif
 }
 
+/*
+ * Leave this thread with no GL context current, the frame in flight landed first (its pack buffer
+ * is mapped in its context). An EGL context is current on one thread at a time; on a machine with
+ * more than one vCPU the calls come from each vCPU's thread (MTTCG), so the machine has the thread
+ * that holds the contexts let go of them before another vCPU calls (hw/arm/n94.c).
+ */
+void gles_host_release_thread(void)
+{
+#ifdef GLES_HOST_ANGLE
+    gles_wb_finish();
+    CGLSetCurrentContext(NULL);
+#endif
+}
+
 /* A display model latched a layer whose first byte is at guest physical `pa`. */
 void gles_host_note_scanout(uint64_t pa)
 {
