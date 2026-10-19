@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -309,11 +310,35 @@ def display_option(display):
     return display
 
 
-def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=True):
+def audio_options(audio):
+    """QEMU arguments for the unit's sound (i2s0, the machine's audiodev=): "dsound", "sdl", "none", or
+    "wav:PATH" to record; None is dsound on Windows and QEMU's own default elsewhere."""
+    if audio is None:
+        audio = "dsound" if sys.platform == "win32" else ""
+    if not audio:
+        return []
+    driver, _, path = audio.partition(":")
+    dev = f"{driver},id=snd0" + (f",path={fwd(os.path.abspath(path))}" if driver == "wav" else "")
+    return ["-audiodev", dev, "-machine", "audiodev=snd0"]
+
+
+def fix_wav(path):
+    """QEMU's wav backend writes the RIFF and data sizes when the backend is finalized, which a machine
+    whose sound card holds it never is: write them from the file's length (16-bit PCM, 44-byte header)."""
+    n = os.path.getsize(path)
+    if n >= 44:
+        with open(path, "r+b") as f:
+            f.seek(4)
+            f.write(struct.pack("<I", n - 8))
+            f.seek(40)
+            f.write(struct.pack("<I", n - 44))
+
+
+def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=True, audio=None):
     """The normal boot: dev's kboot.bin on dev's store, QMP on qmp and qmp + 1 (tools/dev/n94_input.py),
     and with usb the USB link to a usbmux bridge (start_usb_bridge), so the host's libimobiledevice
-    reaches the unit. Waits for QEMU to exit (the window closed, or `n94_input.py quit`) unless detach;
-    returns its exit status, or its PID when detached."""
+    reaches the unit; the sound as audio_options(audio). Waits for QEMU to exit (the window closed, or
+    `n94_input.py quit`) unless detach; returns its exit status, or its PID when detached."""
     os.makedirs(dev.logs, exist_ok=True)
     serial = serial or "file:" + fwd(os.path.join(dev.logs, "serial.log"))
     if usb:
@@ -323,7 +348,7 @@ def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=
     if qmp:
         for port in (qmp, qmp + 1):
             cmd += ["-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off"]
-    cmd += ["-d", "guest_errors", "-D", fwd(os.path.join(dev.logs, "qemu.log"))] + list(extra)
+    cmd += ["-d", "guest_errors", "-D", fwd(os.path.join(dev.logs, "qemu.log"))] + audio_options(audio) + list(extra)
     lock = Lock(dev, "boot")
     out = open(os.path.join(dev.logs, "qemu.out"), "wb")
     kw = {}
@@ -339,3 +364,5 @@ def boot(dev, display="sdl", qmp=4444, serial=None, extra=(), detach=False, usb=
         return proc.wait()
     finally:
         lock.release()
+        if audio and audio.startswith("wav:") and os.path.exists(audio[4:]):
+            fix_wav(audio[4:])

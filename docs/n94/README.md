@@ -119,7 +119,7 @@ boots another (any `device boot` option passes through), and `iphonemu list`, `h
 4. **Normal bundle.** `<root>/NAME/kboot.bin`, the same geometry and identity, AE2 shown, both cores in
    the device tree (the install boot runs on one). `device.json` says `ready`.
 
-`device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [--cpus 1|2] [-- QEMU ARGS]` runs `-M
+`device boot NAME [--display sdl|none] [--qmp PORT] [--detach] [--cpus 1|2] [--audio dsound|sdl|none|wav:FILE] [-- QEMU ARGS]` runs `-M
 iPhone-4S,kboot=<dev>/kboot.bin,nand=<dev>/nand -smp 2` (the A5's two Cortex-A9s, hardware.md "SMP"; `--cpus 1`
 rebuilds the bundle for one core, and back), with the serial log in `<dev>/logs/serial.log`, and the USB
 link to `tools/dev/usbmux_bridge.py`, which it starts (unless one already serves 127.0.0.1:27015; `--no-usb`
@@ -127,7 +127,8 @@ for neither): the host's libimobiledevice then sees the unit (`idevice_id -l`, `
 `ideviceinfo` with `OPENSSL_CONF=tools/dev/openssl-ios6.cnf`; hardware.md "USB: the host"). The battery's
 level is the machine's `battery-level` property as the guest boots (default 80; read once by iOS at boot,
 hardware.md "PMU and sensors"). It
-opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh` does. On the devices measured below, the first boot showed Setup's welcome screen within 4 minutes (M3's
+opens QMP on PORT and PORT+1 for `tools/dev/n94_input.py --port`, as `run-m4.sh` does. The unit's sound plays on the PC (`-audiodev dsound` on Windows; `--audio wav:FILE.wav` records it,
+hardware.md "Audio: the PCM path to the host"). On the devices measured below, the first boot showed Setup's welcome screen within 4 minutes (M3's
 first boot had a 14-minute data migration first). Setup goes on to the home screen with no activation
 page ("Activation").
 

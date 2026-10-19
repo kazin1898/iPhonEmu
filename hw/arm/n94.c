@@ -694,8 +694,9 @@ static void n94_init(MachineState *machine)
 
     /*
      * The AE2 audio coprocessor, high-level (hw/arm/s5l8940_ae2.c): AppleA5AE2's control block,
-     * mailbox, power and configuration blocks and SRAM, its interrupt on AIC 97. Every audio path
-     * on the A5 goes through it, and mediaserverd's audio session waits for that path.
+     * mailbox, power and configuration blocks and SRAM, its interrupt on AIC 97. The audio stack
+     * starts and sleeps it around every sound and mediaserverd's audio session waits for its
+     * answers; the PCM itself goes through i2s0 (below), not the AE2.
      */
     dev = qdev_new(TYPE_S5L8940_AE2);
     sbd = SYS_BUS_DEVICE(dev);
@@ -711,12 +712,20 @@ static void n94_init(MachineState *machine)
      * I2S0-3, the A4's Samsung block (hw/arm/s5l8930_i2s.c) at the A5's bases (i2s-version 3).
      * AppleSamsungI2S's stop path writes +0x00 <- 0x34 and spins on bit 1 ("drained") with
      * IODelay; on the unimplemented window it pinned the CPU from the codec's start on.
-     * ponytail: register files with no host audio yet; give i2s0 "audio-out" once the AE2
-     * path carries PCM.
+     * The system's PCM (AppleARMIISAudio's engine, i2s0/audio0 = the CS42L63) goes from DRAM to
+     * i2s0's TX FIFO (+0x10) on CDMA channel 0x1f, paced by the CDMA model at the port's rate:
+     * i2s0 is the one with "audio-out", to the machine's audiodev= (-audiodev dsound,id=snd0 -M
+     * iPhone-4S,audiodev=snd0 on Windows; wav to record), else QEMU's default (-audio). The rate is NCO n's frequency word, 64 * fs, at PMGR+0x114 + 0x10 n
+     * on the A5 (10B329 writes 0x002b1100, 44.1 kHz, for i2s0).
      */
+    s5l8930_nco_bclk0 = S5L8940_PMGR_BASE + 0x114;
     for (i = 0; i < 4; i++) {
         dev = qdev_new(TYPE_S5L8930_I2S);
         qdev_prop_set_uint8(dev, "port", i);
+        qdev_prop_set_bit(dev, "audio-out", i == 0);
+        if (i == 0 && machine->audiodev) {
+            qdev_prop_set_string(dev, "audiodev", machine->audiodev);
+        }
         sbd = SYS_BUS_DEVICE(dev);
         sysbus_realize_and_unref(sbd, &error_fatal);
         sysbus_mmio_map(sbd, 0, S5L8940_I2S_BASE(i));
@@ -1052,6 +1061,7 @@ static void n94_class_init(ObjectClass *klass, const void *data)
     mc->no_floppy = 1;
     mc->no_parallel = 1;
 
+    machine_add_audiodev_property(mc);
     object_class_property_add_str(klass, "kboot", n94_get_kboot, n94_set_kboot);
     object_class_property_set_description(klass, "kboot",
         "K48KBOOT bundle from tools/ios-prep (required)");

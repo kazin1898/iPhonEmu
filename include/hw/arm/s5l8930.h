@@ -293,12 +293,16 @@ void s5l8930_cdma_sink_done(DeviceState *dev, uint32_t fifo_base, uint32_t size)
  * 0x10 n): AppleS5L8930XPerformanceControllerFunctionNCOFrequency writes
  * +4 = 64 * fs (0x002b1100 for 44.1 kHz, c0645046) when AppleARMIISAudio
  * sets the device rate. 44.1 kHz until the kernel has programmed it.
+ * The A5's PMGR keeps NCO n's frequency word at 0x3f100114 + 0x10 n
+ * (10B329 writes 0x002b1100 there for i2s0): a board with another layout
+ * sets s5l8930_nco_bclk0 to its NCO 0's word.
  */
 #define S5L8930_NCO_BCLK(n)      (S5L8930_PMGR_BASE + 0x104 + 0x10 * (n))
+extern hwaddr s5l8930_nco_bclk0;
 static inline unsigned s5l8930_i2s_rate(unsigned port)
 {
     uint32_t bclk = address_space_ldl_le(&address_space_memory,
-                                         S5L8930_NCO_BCLK(port),
+                                         s5l8930_nco_bclk0 + 0x10 * port,
                                          MEMTXATTRS_UNSPECIFIED, NULL);
 
     return bclk >= 64 * 8000 && bclk <= 64 * 192000 ? bclk / 64 : 44100;
