@@ -6,7 +6,8 @@
 Commands (coordinates are panel pixels, 0..639 x 0..959, portrait, origin top left, however the device is
 turned: the window turns with it, and so does the pointer):
   tap X Y [--hold MS]            press and lift finger 0
-  swipe X1 Y1 X2 Y2 [--ms 400]   press, move in steps, rest, lift (iOS 6 reads a lift while moving as a flick)
+  swipe X1 Y1 X2 Y2 [--ms 400] [--rest 250]
+                                 press, move in steps, rest, lift (--rest 0 lifts while moving: iOS 6 reads a flick)
   key NAME [--hold MS]           press a button: home, power, volup, voldown (the machine's keys:
                                  Home, End, Page Up, Page Down)
   shot OUT.png                   screendump of the panel, converted with Pillow
@@ -99,6 +100,7 @@ def run(q, argv):
             ap.add_argument(n, type=float)
         ap.add_argument("--ms", type=int, default=400)
         ap.add_argument("--steps", type=int, default=16)
+        ap.add_argument("--rest", type=int, default=250, help="ms the finger rests before lifting (0: a flick)")
         a = ap.parse_args(argv[1:])
         rot = q.rotation()
         q.pointer(a.x1, a.y1, rot=rot)
@@ -106,7 +108,7 @@ def run(q, argv):
         for i in range(1, a.steps + 1):
             time.sleep(a.ms / 1000 / a.steps)
             q.pointer(a.x1 + (a.x2 - a.x1) * i / a.steps, a.y1 + (a.y2 - a.y1) * i / a.steps, rot=rot)
-        time.sleep(0.25)
+        time.sleep(a.rest / 1000)
         q.pointer(a.x2, a.y2, False, rot)
     elif op == "key":
         ap = argparse.ArgumentParser(prog="key")

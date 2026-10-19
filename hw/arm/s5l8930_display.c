@@ -26,6 +26,8 @@
 #include "system/runstate.h"
 #include "ui/input.h"
 #include "qemu/cutils.h"
+#include "qapi/error.h"
+#include "qapi/visitor.h"
 #include "system/address-spaces.h"
 #include "migration/vmstate.h"
 #include "ui/console.h"
@@ -189,7 +191,27 @@ struct S5L8930DisplayState {
     FrameTimeline ftl;       /* per-vsync latched-frame ring in guest-virtual time */
     uint32_t stop_after;     /* "stop-after-vsyncs": pause the VM after this many more vsyncs (0 = off) */
     char vsync_input[32];    /* "vsync-input": one touch event delivered at the next vsync ("" = none) */
+    /*
+     * "capture-frames" N: the next N pictures the panel latches, kept in memory (writing them at 60 a second
+     * would slow what they record); "capture-dump" DIR writes them as NNNN_<virtual ms>.ppm and frees them.
+     */
+    uint32_t cap_left;
+    GPtrArray *cap;          /* CapturedFrame */
 };
+
+typedef struct {
+    int64_t virt_ns;
+    unsigned w, h;
+    uint8_t *bgra;
+} CapturedFrame;
+
+static void captured_free(gpointer p)
+{
+    CapturedFrame *f = p;
+
+    g_free(f->bgra);
+    g_free(f);
+}
 
 /* ---- DisplayPipe ------------------------------------------------------- */
 
@@ -1013,6 +1035,16 @@ static void front_latch(S5L8930DisplayState *s)
         memcpy(s->front_key, key, sizeof(key));
         s->front_valid = valid;
         s->front_gen++;
+        if (s->cap_left && valid) {
+            CapturedFrame *f = g_new(CapturedFrame, 1);
+
+            f->virt_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            f->w = w;
+            f->h = h;
+            f->bgra = g_memdup2(s->front, (size_t)w * h * 4);
+            g_ptr_array_add(s->cap, f);
+            s->cap_left--;
+        }
     }
 }
 
@@ -1266,6 +1298,56 @@ static void s5l8930_set_vsync_input(Object *obj, const char *v, Error **errp)
     pstrcpy(s->vsync_input, sizeof(s->vsync_input), v);
 }
 
+static void s5l8930_set_capture_frames(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    S5L8930DisplayState *s = S5L8930_DISPLAY(obj);
+    uint32_t n;
+
+    if (!visit_type_uint32(v, name, &n, errp)) {
+        return;
+    }
+    if (!s->cap) {
+        s->cap = g_ptr_array_new_with_free_func(captured_free);
+    }
+    g_ptr_array_set_size(s->cap, 0);
+    s->cap_left = MIN(n, 1200);
+}
+
+static void s5l8930_get_capture_frames(Object *obj, Visitor *v, const char *name, void *opaque, Error **errp)
+{
+    S5L8930DisplayState *s = S5L8930_DISPLAY(obj);
+    uint32_t n = s->cap ? s->cap->len : 0;
+
+    visit_type_uint32(v, name, &n, errp);
+}
+
+static void s5l8930_set_capture_dump(Object *obj, const char *dir, Error **errp)
+{
+    S5L8930DisplayState *s = S5L8930_DISPLAY(obj);
+
+    s->cap_left = 0;
+    for (guint i = 0; s->cap && i < s->cap->len; i++) {
+        CapturedFrame *f = g_ptr_array_index(s->cap, i);
+        g_autofree char *path = g_strdup_printf("%s/%04u_%08" PRId64 ".ppm", dir, i, f->virt_ns / 1000000);
+        g_autofree uint8_t *rgb = g_malloc((size_t)f->w * f->h * 3 + 32);
+        int hdr = snprintf((char *)rgb, 32, "P6\n%u %u\n255\n", f->w, f->h);
+        uint8_t *d = rgb + hdr;
+
+        for (size_t k = 0; k < (size_t)f->w * f->h; k++) {
+            *d++ = f->bgra[4 * k + 2];
+            *d++ = f->bgra[4 * k + 1];
+            *d++ = f->bgra[4 * k];
+        }
+        if (!g_file_set_contents(path, (char *)rgb, d - rgb, NULL)) {
+            error_setg(errp, "capture-dump: cannot write %s", path);
+            return;
+        }
+    }
+    if (s->cap) {
+        g_ptr_array_set_size(s->cap, 0);
+    }
+}
+
 static void s5l8930_display_init(Object *obj)
 {
     S5L8930DisplayState *s = S5L8930_DISPLAY(obj);
@@ -1300,6 +1382,9 @@ static void s5l8930_display_init(Object *obj)
     object_property_add_str(obj, "frame-timeline", s5l8930_get_frame_timeline, NULL);
     object_property_add_uint32_ptr(obj, "stop-after-vsyncs", &s->stop_after, OBJ_PROP_FLAG_READWRITE);
     object_property_add_str(obj, "vsync-input", NULL, s5l8930_set_vsync_input);
+    object_property_add(obj, "capture-frames", "uint32", s5l8930_get_capture_frames, s5l8930_set_capture_frames,
+                        NULL, NULL);
+    object_property_add_str(obj, "capture-dump", NULL, s5l8930_set_capture_dump);
     object_property_set_description(obj, "frame-timeline",
         "Latched-frame ring, one 'seq virt_ns newframe key' line per vsync in "
         "guest-virtual ns; the jank harness reads it (docs/perf-jank.md)");

@@ -9,7 +9,8 @@ boot   starts a unit (ios_prep.py device boot NAME --display none --no-usb --det
        QEMU is left running for `anim`.
 anim   on a unit at its lock screen or home screen: unlocks, then
        - idle: the QEMU process's CPU over 5 s of a still home screen (the floor the animations sit on);
-       - scroll: SpringBoard's page swipes, left and right (--scrolls of them);
+       - scroll: SpringBoard's page flicks, left and right (--scrolls of them; lifted while moving, as a finger
+         does: a finger resting before the lift would add VBLs with nothing new to draw);
        - each app in --apps: tap its icon, wait for the panel to settle, Home back.
        For each gesture: the frames the panel latched (the display's frame-timeline, guest virtual time, one
        entry per VBL, new = a swap), frames/s over the animation's span (first new frame to last), the VBLs it
@@ -162,8 +163,9 @@ def cmd_anim(a):
     scrolls = []
     for i in range(a.scrolls):                              # page 1 -> 2, 2 -> 1, ...
         x1, x2 = (560, 80) if i % 2 == 0 else (80, 560)
-        scrolls.append(gesture(q, pid, lambda: run("swipe", str(x1), "500", str(x2), "500", "--ms", "200",
-                                                   "--steps", "8")))
+        # a flick (lifted while moving): a resting finger would count as frames the panel did not draw
+        scrolls.append(gesture(q, pid, lambda: run("swipe", str(x1), "500", str(x2), "500", "--ms", "150",
+                                                   "--steps", "6", "--rest", "0")))
         if i == 0 and a.shots:
             run("shot", os.path.join(a.shots, "page2.png"))
     res["scroll"] = scrolls

@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="704" viewBox="0 0 980 704" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
 <rect width="980" height="704" rx="8" fill="#0d1117"/>
 <text x="20" y="28" fill="#e6edf3" font-size="17" font-weight="600">iPhonEmu progress map</text>
-<text x="20" y="46" fill="#8b949e">overall 83.2% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
+<text x="20" y="46" fill="#8b949e">overall 84.0% · iPhone 4S (A5) running iOS 6.1.3 at the speed of the real phone, on Windows, then Android · updated 2026-10-19</text>
 <text x="20" y="82" fill="#c9d1d9" font-weight="600">System</text>
 <text x="36" y="108" fill="#e6edf3">Toolchain and Windows build</text>
 <rect x="380" y="95" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -173,7 +173,7 @@
 <rect x="548" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="569" y="459" width="18" height="16" rx="3" fill="#3fb950"/>
 <text x="598" y="472" fill="#e6edf3" font-weight="600">100%</text>
-<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation and the apps&#x27; own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page swipes 44 vs 15 frames/s, host CPU 22-26 vs 109-114 ms a frame, app openings 21-29 vs 7-15 frames/s; the default of prepare/device create (--software-gl to opt out)</text>
+<text x="642" y="472" fill="#8b949e" font-size="12">CoreAnimation and the apps&#x27; own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page flicks at 60 frames/s (every VBL) vs 22, host CPU 27-29 vs 135 ms a frame; zoom in/out and keyboard pop-ups frame by frame with no glitch; the default of prepare/device create (--software-gl to opt out)</text>
 <text x="36" y="498" fill="#e6edf3">Multitouch (SPI) and buttons</text>
 <rect x="380" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="401" y="485" width="18" height="16" rx="3" fill="#3fb950"/>
@@ -222,12 +222,12 @@
 <rect x="443" y="615" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="464" y="615" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="485" y="615" width="18" height="16" rx="3" fill="#3fb950"/>
-<rect x="506" y="615" width="18" height="16" rx="3" fill="#30363d"/>
+<rect x="506" y="615" width="18" height="16" rx="3" fill="#3fb950"/>
 <rect x="527" y="615" width="18" height="16" rx="3" fill="#30363d"/>
 <rect x="548" y="615" width="18" height="16" rx="3" fill="#30363d"/>
 <rect x="569" y="615" width="18" height="16" rx="3" fill="#30363d"/>
-<text x="598" y="628" fill="#e6edf3" font-weight="600">60%</text>
-<text x="642" y="628" fill="#8b949e" font-size="12">measured 2026-10-19 against iOS 6.1.3 on an iPhone 4 (the 4S is no slower): boot 36-38 s vs 31 s (0.82x), launches 0.39-0.67x, page swipes 44 vs 60 frames/s, app openings 21-30 vs 60; swipes are latency-bound (vCPUs 12-32 % busy), cold launches TCG-bound; an LTO build changes nothing</text>
+<text x="598" y="628" fill="#e6edf3" font-weight="600">70%</text>
+<text x="642" y="628" fill="#8b949e" font-size="12">against iOS 6.1.3 on an iPhone 4 (no 4S timings published; the 4S is no slower): page flicks and app zooms at 60 frames/s like the phone; boot 36-41 s vs 31 (0.8x); launches 0.39-0.67x, the zoom starting 0.38 s after a tap: guest CPU work under TCG (an LTO build and the TLB broadcasts, ~1 %, are not the limit)</text>
 <text x="36" y="654" fill="#e6edf3">iPhonEmu.exe (open IPSW, prepare, boot)</text>
 <rect x="380" y="641" width="18" height="16" rx="3" fill="#30363d"/>
 <rect x="401" y="641" width="18" height="16" rx="3" fill="#30363d"/>

@@ -91,7 +91,7 @@
           "name": "GPU: GL bridge on Windows (ANGLE)",
           "percent": 100,
           "weight": 6,
-          "note": "CoreAnimation and the apps' own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page swipes 44 vs 15 frames/s, host CPU 22-26 vs 109-114 ms a frame, app openings 21-29 vs 7-15 frames/s; the default of prepare/device create (--software-gl to opt out)"
+          "note": "CoreAnimation and the apps' own GL (Maps: VAOs, ProgramUniform, late #extension) through ANGLE/D3D11, identical to software: page flicks at 60 frames/s (every VBL) vs 22, host CPU 27-29 vs 135 ms a frame; zoom in/out and keyboard pop-ups frame by frame with no glitch; the default of prepare/device create (--software-gl to opt out)"
         },
         {
           "name": "Multitouch (SPI) and buttons",
@@ -123,9 +123,9 @@
       "items": [
         {
           "name": "Speed: 1:1 with a real 4S on PC",
-          "percent": 60,
+          "percent": 70,
           "weight": 5,
-          "note": "measured 2026-10-19 against iOS 6.1.3 on an iPhone 4 (the 4S is no slower): boot 36-38 s vs 31 s (0.82x), launches 0.39-0.67x, page swipes 44 vs 60 frames/s, app openings 21-30 vs 60; swipes are latency-bound (vCPUs 12-32 % busy), cold launches TCG-bound; an LTO build changes nothing"
+          "note": "against iOS 6.1.3 on an iPhone 4 (no 4S timings published; the 4S is no slower): page flicks and app zooms at 60 frames/s like the phone; boot 36-41 s vs 31 (0.8x); launches 0.39-0.67x, the zoom starting 0.38 s after a tap: guest CPU work under TCG (an LTO build and the TLB broadcasts, ~1 %, are not the limit)"
         },
         {
           "name": "iPhonEmu.exe (open IPSW, prepare, boot)",

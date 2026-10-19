@@ -545,30 +545,45 @@ GL bridge, the store on the SSD, four runs (`runs/n94/progress/2026-10-19_SPEED_
 | Calendário, tap to settled | 1.23 s | 1.73-1.92 s | 0.67x |
 | Safari | 1.13 s | 1.88-1.92 s | 0.59x |
 | Ajustes | 1.31 s | 3.31-3.45 s | 0.39x |
-| home screen page swipe | 60 frames/s | 43-45 frames/s | 0.73x |
-| an app's opening | 60 frames/s | 21-30 frames/s | 0.35-0.5x |
+| home screen page flick | 60 frames/s | 60.1 frames/s | 1x |
+| an app's opening zoom | 60 frames/s | 60 frames/s, starting 0.38 s after the tap | 1x once it starts |
 
 Where the host's time goes (`tools/dev/n94_profile.py`: each QEMU thread's CPU over a window, the MMIO accesses per
 region from `memory_region_ops_*`, and the GL bridge's own `gles_obj_log`):
 
 - **Idle** (a still home screen): each vCPU 7-8 % of a host core, the main loop 4 %. The guest's idle loop is
   `wfi` and QEMU halts the vCPU there.
-- **Page swipes are not CPU-bound.** During the animation itself each vCPU runs 12-32 % of a core; the GL bridge
+- **Page swipes are not CPU-bound** (and run at every VBL: "Smoothness" below). During the animation each vCPU runs
+  12-32 % of a core; the GL bridge
   costs the host about 2 ms a frame (10 s of swipes at 25 frames/s: 184 ms in GL calls, 195 ms in the traps that
   carry them, 130 ms of writeback); the busiest MMIO is the AIC's counter (30,000 reads/s, lockless), spi1 (the
-  digitizer, 5,200/s), the PMGR (3,600/s), the AIC (3,400/s) and the display pipe (3,400/s). The frames that miss
-  their VBL are missed while both vCPUs idle: what limits scrolling is the latency of the chain from a touch
-  through SpringBoard and backboardd to a swap and the VBL, across the two vCPUs, not instructions.
+  digitizer, 5,200/s), the PMGR (3,600/s), the AIC (3,400/s) and the display pipe (3,400/s). (A first reading of
+  44 frames/s, with VBLs missed while both vCPUs idled, was the bench's finger resting before the lift.)
 - **A cold app launch is TCG-bound**: each vCPU 61-77 % of a core for its two seconds (a warm one, 20 %).
 - **TCG**: no translation-buffer flush in a session (412 MB of the 1 GiB buffer), 17 guest bytes to 395 of host
-  code per block (22.5x), 39 % of blocks chained directly; 2.3 million partial TLB flushes in six minutes, each a
-  cross-vCPU synchronization under MTTCG.
+  code per block (22.5x), 39 % of blocks chained directly; 2.3 million partial TLB flushes in six minutes (16,000 a
+  second while an app opens), each an exclusive section under MTTCG. Timed in `start_exclusive`: 1-14 ms of waiting
+  per 2 s of use, 2 % at boot, so not the limit; and flushing the other vCPU asynchronously instead hangs the
+  kernel at boot (iOS relies on the broadcast completing).
 - **The build is not it**: an LTO build without TCG plugins and debug info (`build-rel`, `IPHONEMU_QEMU` points
   `device boot` at another executable) gave the same boot, swipes and launches within the run-to-run spread.
 
-What is left toward 1:1, in the order it would pay: find what each missed VBL waits on (the frame-timeline's held
-VBLs against the guest's IPIs, timers and Mach messages between SpringBoard and backboardd); then TCG throughput for
-launches (the TLB flush synchronization, the block chaining).
+**Smoothness, frame by frame** (`tools/dev/n94_frames.py`: the display keeps every picture it latches during a
+gesture, QOM `capture-frames` / `capture-dump`, and the tool makes a contact sheet with the milliseconds between
+them; `runs/n94/progress/2026-10-19_FLUIDEZ_quadros.png`): a page flick settles in 16 frames, one per VBL; an app's
+zoom in (Calendário) in 17 and the zoom out on Home in 23, one per VBL; keys in Notas pop up 87 ms (median, 5 VBLs)
+after the touch. No frame out of order, repeated, torn or dark in any of them. The pauses left are the guest's CPU
+work under TCG, not drawing: 0.38 s between an icon's tap and its zoom (one vCPU saturated while SpringBoard
+launches the app), the app's own screen 1.2 s after the zoom, autocorrect after a space (one key took 853 ms), the
+keyboard's first use in a session (917 ms), and ~0.3 s of Home's double-press window, which iOS waits out itself.
+
+Not used for the comparison: the fork's `contrib/it-gltest` (a GL fixture installed as a launchd job, a program on
+the guest, which this work leaves out) and a benchmark app's IPA from the App Store, whose executable is encrypted
+for its purchaser (not decrypted here). No published timings of a 4S on iOS 6 were found (the comparisons online
+are videos without numbers); the iPhone 4's above use Ars Technica's method, tap to an app ready for input.
+
+What is left toward 1:1 is TCG throughput for launches, autocorrect and the boot: the C side of QEMU (an LTO build
+changed nothing) and the TLB broadcasts (about 1 %) are not it, so the next step is the generated code itself.
 
 ### Activation: lockdownd's short-circuit (2026-10-18)
 

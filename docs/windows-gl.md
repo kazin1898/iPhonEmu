@@ -215,9 +215,9 @@ Radeon RX 5500 XT, `runs/n94/progress/2026-10-19_GPU_software-x-ponte.png`:
 | | software (CA_ENABLE_OGL=0) | GL bridge | |
 |---|---|---|---|
 | boot to the lock screen | 41.1 / 37.0 s | 37.1 / 38.1 s | the same: drawing does not limit the boot |
-| home screen page swipe, frames/s | 16.2 / 15.0 | 44.1 / 44.7 | 2.9x |
-| frames latched per swipe | 15 / 14 | 32 / 33 | 2.3x |
-| host CPU per frame (swipe) | 114 / 109 ms | 22 / 26 ms | 4.6x less |
+| home screen page flick, frames/s | 21.9 / 21.7 | 60.1 / 60.1 | 2.8x: every VBL |
+| frames latched per flick | 9 / 8.5 | 24.5 / 24.5 | 2.9x |
+| host CPU per frame (flick) | 135 / 136 ms | 27 / 29 ms | 4.8x less |
 | app opening, frames/s (5 apps) | 6.7-15.1 | 20.6-29.1 | ~2.5x |
 | host CPU per frame (opening) | 139-241 ms | 38-78 ms | ~3x less |
 | Ajustes, tap to settled | 4.57 / 4.42 s | 3.38 / 3.42 s | -1.1 s |
@@ -226,7 +226,10 @@ Radeon RX 5500 XT, `runs/n94/progress/2026-10-19_GPU_software-x-ponte.png`:
 | Safari | 2.10 / 1.97 s | 1.92 s (the other run kept animating) | the same |
 | Mapas | 3.55 / 3.44 s | 3.00 / 2.92 s | -0.5 s |
 
-The idle home screen costs 15-18 % of one host core either way. The screens are the same pixel for pixel in both
+The swipes were first measured with the finger resting 250 ms before the lift (44 against 15-16 frames/s): the
+VBLs of the rest, with nothing new to draw, counted against the animation. `n94_bench.py` now flicks (lifts while
+moving, as a finger does) and the figures above are those. The idle home screen costs 15-25 % of one host core
+either way. The screens are the same pixel for pixel in both
 (Ajustes, Fotos, Safari, Calendário, the home screen's second page). The bridge is now the default
 (`ios_prep.py prepare` / `device create`; "CoreAnimation by default" below).
 
