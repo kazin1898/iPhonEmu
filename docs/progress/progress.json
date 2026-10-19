@@ -66,9 +66,9 @@
         },
         {
           "name": "DMA (CDMA) and crypto (AES, SHA, PKE)",
-          "percent": 60,
+          "percent": 100,
           "weight": 2,
-          "note": "CDMA + AES filter from the A4; SHA-2 block new, untouched by the kernel so far"
+          "note": "CDMA and its AES filter carry SecureRoot, the keybag and content protection with no CDMA error; PKE matched (AppleSamsungPKE), unused by a boot; the A5's SHA-2 block has no driver in 10B329 (corecrypto hashes in software), so nothing to model"
         },
         {
           "name": "USB (OTG device, EHCI/OHCI, HSIC)",

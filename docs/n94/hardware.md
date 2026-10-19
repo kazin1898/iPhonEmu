@@ -117,9 +117,9 @@ An address NAK comes back as XEN with MTN (kIOReturn 0xe00002e9, `AppleDialogPMU
 | dwi | 0x3F700000, AIC 6 | 6 | `dwi,s5l8940x` | `AppleS5L8940XDWI`: single-wire PMU buck control (the A4's SWI at 0xBF600000 plays the same role); a register file in `n94.c` ("Platform"). |
 | iop | 0x3F300000 | 2 | `iop,s5l8940x`, `iop-version 1` | **new**: `AppleA5IOP` + `EmbeddedIOP-47.3` run `IOP_s5l8940xiop_firmware` (EmbeddedIOP iBoot-1537.9.55, 0x29000 bytes, Thumb-2). Not the A4 block: the control registers, the doorbells (AIC `IPID` functions) and the firmware's own use of the AIC are in "The IOP" below. A4 IOP is 0x86300000 + VICs at 0xBF300000. |
 | ae2 | 0x341E0000, 0x341E1000, 0x341A0000, 0x341C1000, 0x34000000+0x30000 | 97, 98 | `ae2,s5l8940x` | **new** `s5l8940_ae2.c` (high-level, M3): audio engine (`AppleA5AE2`, `IOP_s5l8940xae2_firmware`); section "The AE2". |
-| cdma | 0x37000000+0x2D000, 0x37800000+0x9000 (AES) | 51..94 | `cdma-version 3`, `max-channel 44` | **A4** `s5l8930_cdma.c` at the A5 bases (`dram-base`, `uart-base`, `paced-base` properties): channel n interrupts at 50+n; the model's 38 channels leave 39..44 in the unimplemented window. Its AES filter is what `CDMAAES`/`IOAESAccelerator` drive. |
-| sha2 | 0x30200000 | 38 | `sha,s5l8940x` | **new**: SHA-256 (A4 has SHA-1 at 0x80100000, `s5l8930_sha1.c`). |
-| pke | 0x33100000 | 17 | `pke-1,samsung` | **A4** `ipod_touch_pke.c` (0x83100000). |
+| cdma | 0x37000000+0x2D000, 0x37800000+0x9000 (AES) | 51..94 | `cdma-version 3`, `max-channel 44` | **A4** `s5l8930_cdma.c` at the A5 bases (`dram-base`, `uart-base`, `paced-base` properties): channel n interrupts at 50+n; the model's 38 channels leave 39..44 in the unimplemented window (no boot reaches them). Its AES filter is what `CDMAAES`/`IOAESAccelerator` drive (SecureRoot, the keybag, content protection); no `CDMA::` error in a boot. |
+| sha2 | 0x30200000 | 38 | `sha,s5l8940x` | **unused by 10B329**: no kext in the kernelcache matches `sha,s5l8940x` (the only SHA class is IOCryptoAcceleratorFamily's generic `IOSHA1Accelerator`, with no provider; corecrypto hashes in software), and a boot never touches 0x30200000. Left in the unimplemented window. |
+| pke | 0x33100000 | 17 | `pke-1,samsung` | **A4** `ipod_touch_pke.c` (0x83100000), matched by `AppleSamsungPKE`; nothing calls on it during a boot and Setup (`IT_PKE_DEBUG=1` logs no access). |
 | perfcounter, trace | 0x3F104000, 0x3F800000, 0x3D300000; 0x3D203000.. | | | unimplemented window. |
 
 ## Storage
