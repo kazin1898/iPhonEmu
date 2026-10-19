@@ -129,7 +129,16 @@ guest writes under content protection (Setup's completion, the wallpaper, the ic
 the next boot. A v1 device keeps working as it was but forgets those on every boot; make it again.
 
 `device refresh NAME` repeats the install boot on an installed store (v2 only). The markers are written again and
-the data volume and keybag are kept. A device needs this after a later edit to its firmware's
+the data volume and keybag are kept. So is the iOS's own state on it: the install writes the `/private/var`
+skeleton's files (lockdownd's data ark, the users' `.GlobalPreferences.plist`, a few logs' seeds) only where
+they are missing. Until 2026-10-19 it made them anew on every install, which put lockdownd's record and the
+language and region back to the IPSW's (`gl5`'s Argentine region format came back as United States). The
+same day `gl5` also showed Setup again after its refreshes, in its "update completed" mode, and that was not
+the refresh. Setup presented a single page, Siri, which had been unavailable when the unit was first set up
+(assistantd killed itself at every boot, hardware.md "Boot: what a normal boot logs"). Once the audio-session
+timeout was raised Siri worked, and Setup offers a newly available feature once. After "Don't Use Siri" and a
+refresh with the fixed helper, `gl5` boots to its lock screen with its region intact
+(`runs/n94/progress/2026-10-19_REFRESH_gl5-bloqueio-sem-setup.png`). A device needs this after a later edit to its firmware's
 `rootfs.hfs`, because the FTL's garbage collection copies served pages and those copies do not follow
 the edit ("M3", item 4).
 

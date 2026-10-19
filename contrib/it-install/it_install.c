@@ -393,6 +393,7 @@ static void mkdir_as(const char *path, int mode, int uid)
 
 #define O_CREAT 0x200
 #define O_TRUNC 0x400
+#define O_EXCL 0x800
 #define SYS_symlink 57
 #define SYS_lchown 364
 
@@ -439,14 +440,21 @@ static int var_skeleton(void)
             n++;
             continue;
         } else {
-            sys(SYS_unlink, (long)path, 0, 0, 0);         /* made anew, as write_overrides does */
-            fd = (int)sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_TRUNC, e->mode, 0);
-            if (fd >= 0) {
-                if (e->size) {
-                    sys(SYS_write, fd, (long)e->data, e->size, 0);
-                }
-                sys(SYS_close, fd, 0, 0, 0);
+            /*
+             * Only where it is missing. A refresh of an installed unit used to make every file anew,
+             * and these are the iOS's own state once it has run: lockdownd's data ark (the activation
+             * record and everything else lockdownd keeps) and the users' .GlobalPreferences.plist
+             * (language and region). Put back to the IPSW's, a unit past Setup came back to Setup's
+             * "update completed" pages.
+             */
+            fd = (int)sys(SYS_open, (long)path, O_WRONLY | O_CREAT | O_EXCL, e->mode, 0);
+            if (fd < 0) {
+                continue;
             }
+            if (e->size) {
+                sys(SYS_write, fd, (long)e->data, e->size, 0);
+            }
+            sys(SYS_close, fd, 0, 0, 0);
         }
         sys(SYS_chmod, (long)path, e->mode, 0, 0);
         sys(SYS_chown, (long)path, e->uid, e->gid, 0);

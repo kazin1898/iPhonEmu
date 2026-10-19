@@ -159,8 +159,11 @@ DATA_ARK = b"""<?xml version="1.0" encoding="UTF-8"?>
 
 def lockdown_seed(skeleton):
     """The data ark entries for the skeleton: /private/var/root/Library/Lockdown/data_ark.plist (root,
-    0644) and its folder, the folders the IPSW does not have added parents first. The install boot makes
-    the file anew each time, so it also resets a data ark lockdownd had turned Unactivated."""
+    0644) and its folder, the folders the IPSW does not have added parents first. The install boot writes
+    it only where there is none (as every skeleton file): once lockdownd has run, the data ark is its own
+    record of the unit, and a refresh that put the seed back sent a unit past Setup to Setup's update
+    pages. (With lockdownd's activation short-circuit it cannot turn Unactivated, which the rewrite was
+    for.)"""
     have = {p for k, p, *_ in skeleton if k == "d"}
     out = [("d", d, 0o755, 0, 0, b"") for d in ("/root", "/root/Library", "/root/Library/Lockdown")
            if d not in have]
