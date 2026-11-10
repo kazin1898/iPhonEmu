@@ -8041,8 +8041,9 @@ void gles_host_reset(void)
 #endif
 }
 
-int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
-                       uint32_t argc, const uint32_t *a)
+static int64_t gles_host_call_unlocked(CPUState *cpu, uint32_t slot,
+                                       uint32_t ctx, uint32_t argc,
+                                       const uint32_t *a)
 {
     uint64_t t0;
     int64_t r;
@@ -8201,4 +8202,27 @@ void gles_host_stats(uint64_t *draws, uint64_t *presents)
 {
     *draws = gh.draws;
     *presents = gh.presents;
+}
+
+
+/* iPhonEmu: serialize host GL across vCPU threads. ANGLE's contexts are
+ * single-threaded and an EGL context can be current on only one thread, so
+ * every guest GL call runs under one lock and hands the context back on exit. */
+static GMutex gles_big_lock;
+int64_t gles_host_call(CPUState *cpu, uint32_t slot, uint32_t ctx,
+                       uint32_t argc, const uint32_t *a)
+{
+    static int keep = -1;
+    if (keep < 0) {
+        keep = getenv("IT_GLES_KEEP_CURRENT") != NULL;
+    }
+    g_mutex_lock(&gles_big_lock);
+    int64_t r = gles_host_call_unlocked(cpu, slot, ctx, argc, a);
+#ifdef GLES_HOST_ANGLE
+    if (!keep) {
+        gles_angle_release_current();
+    }
+#endif
+    g_mutex_unlock(&gles_big_lock);
+    return r;
 }

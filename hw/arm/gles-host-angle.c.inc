@@ -134,3 +134,13 @@ GLES_ANGLE_FBO(void, GetFramebufferAttachmentParameteriv, (GLenum t, GLenum a, G
 #define glDeleteRenderbuffersEXT        gles_angle_DeleteRenderbuffers
 #define glGetRenderbufferParameterivEXT gles_angle_GetRenderbufferParameteriv
 #define glGetFramebufferAttachmentParameterivEXT gles_angle_GetFramebufferAttachmentParameteriv
+
+
+/* iPhonEmu: drop this thread's context so another vCPU thread can take it. */
+static void __attribute__((unused)) gles_angle_release_current(void)
+{
+    if (angle_current) {
+        eglMakeCurrent(angle_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        angle_current = NULL;
+    }
+}
