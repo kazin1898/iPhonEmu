@@ -90,7 +90,7 @@ static int as_MISValidateSignature(void *path, void *options) {
     // The old two-argument API returns no metadata. Keep the proven 2.x path:
     // its original verifier contributes nothing to the installation result.
     if (in_installd()) return 0;
-    int (*real)(void *, void *) = dlsym(RTLD_NEXT, "MISValidateSignature");
+    int (*real)(void *, void *) = MISValidateSignature;
     return real ? real(path, options) : -1;
 }
 
@@ -155,7 +155,7 @@ static void signature_info(CFStringRef path, CFStringRef *ident, CFTypeRef *ents
 static int as_MISValidateSignatureAndCopyInfo(void *path, void *options,
                                              CFDictionaryRef *info) {
     int (*real)(void *, void *, CFDictionaryRef *) =
-        dlsym(RTLD_NEXT, "MISValidateSignatureAndCopyInfo");
+        MISValidateSignatureAndCopyInfo;
     // Copy APIs may leave the out parameter untouched on failure.
     if (info) *info = 0;
     int result = real ? real(path, options, info) : -1;
@@ -199,7 +199,7 @@ static int is_appsync_certificate(CFTypeRef value) {
 // certificate may use CFData as a stand-in when legacy Security rejects it.
 static SecCertificateRef as_SecCertificateCreateWithData(CFAllocatorRef a, CFDataRef d) {
     SecCertificateRef (*real)(CFAllocatorRef, CFDataRef) =
-        dlsym(RTLD_NEXT, "SecCertificateCreateWithData");
+        SecCertificateCreateWithData;
     SecCertificateRef result = real ? real(a, d) : 0;
     if (!result && in_installd() && is_appsync_certificate((CFTypeRef)d))
         result = (SecCertificateRef)CFRetain((CFTypeRef)d);
@@ -210,7 +210,7 @@ static CFStringRef as_SecCertificateCopySubjectSummary(SecCertificateRef c) {
     if (in_installd() && is_appsync_certificate((CFTypeRef)c))
         return CFStringCreateWithCString(kCFAllocatorDefault, "AppSync", 0x0600);
     CFStringRef (*real)(SecCertificateRef) =
-        dlsym(RTLD_NEXT, "SecCertificateCopySubjectSummary");
+        SecCertificateCopySubjectSummary;
     return real ? real(c) : 0;
 }
 
